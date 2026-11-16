@@ -128,7 +128,7 @@
     }
     el.innerHTML = '<div class="pkgpick"><h2>Step 1 · Choose your bundle</h2><p class="note">Pick a bundle, then fill it with any cards up to its card value.</p><div class="pkglist">'
       + S.bundles.map(function (b) {
-        return '<button class="pkg' + (b.id === S.pkg ? ' on' : '') + '" data-act="pick" data-id="' + esc(b.id) + '"><span class="pkg-name">' + esc(b.name) + '</span><span class="pkg-price">' + money(b.price_cents) + '</span><small>Pick ' + money(b.value_cents) + ' of cards' + (b.max_cards ? ' · up to ' + b.max_cards : '') + '</small><small><b>' + (b.shipping_cents ? '+ ' + money(b.shipping_cents) + ' shipping' : 'Free shipping') + '</b></small>' + (b.note ? '<small>' + esc(b.note) + '</small>' : '') + (b.value_cents > b.price_cents ? '<span class="deal">+' + money(b.value_cents - b.price_cents) + ' bonus value</span>' : '') + '</button>';
+        return '<button class="pkg' + (b.id === S.pkg ? ' on' : '') + '" data-act="pick" data-id="' + esc(b.id) + '"><span class="pkg-name">' + esc(b.name) + '</span><span class="pkg-price">' + money(b.price_cents) + '</span><small>Pick ' + money(b.value_cents) + ' of cards' + (b.max_cards ? ' · up to ' + b.max_cards : '') + '</small><small><b>' + (b.shipping_cents ? '+ ' + money(b.shipping_cents) + ' shipping' : (/shipping/i.test(b.note || '') ? 'Shipping included' : 'Free shipping')) + '</b></small>' + (b.note ? '<small>' + esc(b.note) + '</small>' : '') + (b.value_cents > b.price_cents ? '<span class="deal">+' + money(b.value_cents - b.price_cents) + ' bonus value</span>' : '') + '</button>';
       }).join("") + '</div></div>';
   }
   function visible() {
