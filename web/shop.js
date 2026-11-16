@@ -99,6 +99,55 @@
     return "ok";
   }
 
+  /* ---------- bundle upgrades ---------- */
+  // Bigger bundles that fit the cards already picked plus `extra` cents / `extraN` cards.
+  function upgradeOptions(extra, extraN) {
+    var st = status(), cur = st.p, need = st.used + extra, n = st.count + extraN;
+    return S.bundles.filter(function (b) {
+      return (!cur || b.id !== cur.id) && (!cur || b.value_cents > cur.value_cents || (cur.max_cards && (!b.max_cards || b.max_cards > cur.max_cards)))
+        && b.value_cents >= need && (!b.max_cards || n <= b.max_cards);
+    }).sort(function (a, b) { return a.price_cents - b.price_cents; });
+  }
+  function bundleCost(b) { return b ? b.price_cents + (S.delivery === "ship" ? b.shipping_cents : 0) : 0; }
+  function closeUpgrade() { var d = document.getElementById("upg"); if (d) { if (d.open) d.close(); d.remove(); } }
+  function openUpgrade(cardId) {
+    closeUpgrade();
+    var st = status(), c = cardId ? cardById(cardId) : null, extra = c ? c.price_cents : 0, opts = upgradeOptions(extra, c ? 1 : 0), cur = st.p;
+    var h = '<form method="dialog" class="upg"><div class="row2"><h2>' + (c ? 'Upgrade to add this card' : 'Upgrade your bundle') + '</h2><button class="btn ghost sm" value="x" aria-label="Close">✕</button></div>'
+      + '<p class="note">' + (c ? '<b>' + esc(c.name) + '</b> (' + money(c.price_cents) + ') would put you at ' + money(st.used + extra) : 'Your cards add up to ' + money(st.used)) + (cur ? ', but your ' + esc(cur.name) + ' holds ' + money(cur.value_cents) + ' of cards.' : '.') + '</p>';
+    if (!opts.length) h += '<p class="warn">No bundle is big enough for that. Remove a card from your cart to make room.</p>';
+    else h += '<div class="upglist">' + opts.map(function (b, i) {
+      var diff = bundleCost(b) - bundleCost(cur), left = b.value_cents - st.used - extra;
+      return '<button type="button" class="upgopt' + (i === 0 ? ' best' : '') + '" data-upg="' + esc(b.id) + '"><span><b>' + esc(b.name) + '</b><small>Pick ' + money(b.value_cents) + ' of cards · ' + money(left) + (c ? ' left after this card' : ' left') + (b.shipping_cents ? ' · + ' + money(b.shipping_cents) + ' shipping' : '') + '</small></span>'
+        + '<span class="upgprice"><span class="price">' + money(b.price_cents) + '</span>' + (cur ? '<small>' + (diff >= 0 ? '+' : '−') + money(Math.abs(diff)) + ' more</small>' : '') + '</span></button>';
+    }).join("") + '</div>';
+    h += '<div class="acts"><button class="btn ghost" value="x">' + (opts.length ? 'Keep my bundle' : 'OK') + '</button></div></form>';
+    var d = document.createElement("dialog"); d.id = "upg"; d.className = "upgdlg"; d.innerHTML = h; document.body.appendChild(d);
+    d.addEventListener("click", function (e) {
+      if (e.target === d) { closeUpgrade(); return; }
+      var o = e.target.closest("[data-upg]"); if (!o || o.disabled) return;
+      o.disabled = true; chooseUpgrade(o.getAttribute("data-upg"), cardId);
+    });
+    d.addEventListener("close", function () { setTimeout(closeUpgrade, 0); });
+    d.showModal();
+    var first = d.querySelector(".upgopt"); if (first) first.focus();
+  }
+  async function chooseUpgrade(bundleId, cardId) {
+    var b = S.bundles.find(function (x) { return x.id === bundleId; });
+    S.pkg = bundleId; ls("bbh-pkg", bundleId); S.picking = false; closeUpgrade();
+    if (cardId) await addCard(cardId);
+    renderPkgs(); renderGrid(); renderCart();
+    toast("Upgraded to " + (b ? b.name : "a bigger bundle") + (cardId ? " and added your card." : "."));
+  }
+  async function addCard(id, btn) {
+    if (!S.signedIn) { toast(ERR.not_signed_in); return; }
+    if (btn) btn.disabled = true;
+    var r = await sb.rpc("hold_card", { p_card: id });
+    if (r.error) toast(errText(r.error));
+    else if (r.data && r.data.server_now) S.offset = Date.parse(r.data.server_now) - Date.now();
+    await refresh(); renderGrid(); renderCart(); renderPkgs();
+  }
+
   /* ---------- render ---------- */
   function render() {
     var s = S.settings || {};
@@ -151,8 +200,8 @@
       if (heldOut) act = '<button class="btn sm" disabled>Held</button>';
       else if (n && c.qty > 1) act = '<span class="stepper"><button data-act="dec" data-id="' + c.id + '" aria-label="Remove one">−</button><span>' + n + '</span><button data-act="inc" data-id="' + c.id + '" aria-label="Add one"' + (why !== "ok" ? ' disabled' : '') + '>+</button></span>';
       else if (n) act = '<button class="btn sm" data-act="dec" data-id="' + c.id + '">Remove</button>';
-      else if (why === "over") act = '<button class="btn sm" disabled>Over budget</button>';
-      else if (why === "full") act = '<button class="btn sm" disabled>Bundle full</button>';
+      else if (why === "over") act = '<button class="btn sm over" data-act="upgrade" data-id="' + c.id + '" title="Upgrade your bundle to add this card" aria-label="Over budget. Upgrade your bundle to add ' + esc(c.name) + '">Over budget</button>';
+      else if (why === "full") act = '<button class="btn sm over" data-act="upgrade" data-id="' + c.id + '" title="Upgrade your bundle to add this card">Bundle full</button>';
       else act = '<button class="btn sm primary" data-act="inc" data-id="' + c.id + '">Add</button>';
       var bits = [c.set_name, c.number ? "#" + c.number : ""].filter(Boolean).join(" · ");
       return '<article class="tile' + (n ? ' in' : '') + (heldOut ? ' held' : '') + '"><div class="art">' + (c.image_path ? img(c.image_path, c.name) : '<div class="ph">' + esc(c.name) + '</div>') + (heldOut ? '<span class="badge">In someone’s cart</span>' : '') + '</div>'
@@ -173,8 +222,7 @@
     });
     if (st.p && st.count) h += '<div class="line"><span>' + esc(st.p.name) + '</span><span class="price">' + money(st.p.price_cents) + '</span></div>' + (st.p.shipping_cents ? '<div class="line"><span>Shipping</span><span class="price">' + (st.ship ? money(st.ship) : 'When your stack ships') + '</span></div>' : '');
     if (st.addT) h += '<div class="line"><span>Add-ons</span><span class="price">' + money(st.addT) + '</span></div>';
-    if (st.over) h += '<p class="warn">Your cards are ' + money(-st.left) + ' over your bundle. Remove a card or choose a bigger bundle.</p>';
-    if (st.tooMany) h += '<p class="warn">Your bundle allows ' + st.p.max_cards + ' cards.</p>';
+    if (st.over || st.tooMany) h += '<div class="warn upwarn"><span>' + (st.over ? 'Your cards are ' + money(-st.left) + ' over your bundle.' : 'Your bundle allows ' + st.p.max_cards + ' cards.') + '</span>' + (upgradeOptions(0, 0).length ? '<button class="btn sm primary" data-act="upgrade">Upgrade bundle</button>' : '<span>Remove a card to fit.</span>') + '</div>';
     h += '<div class="total"><span>Total</span><strong class="price">' + money(st.due) + '</strong></div>';
     if (!st.empty) h += '<button class="btn primary big" data-act="checkout"' + (st.block ? ' disabled' : '') + '>Checkout · ' + money(st.due) + '</button><button class="btn ghost sm" data-act="clear">Empty cart</button>';
     el.innerHTML = h;
@@ -291,14 +339,11 @@
     else if (a === "inc") {
       var c = cardById(id), st = status(), why = c ? canAdd(c, st) : "max";
       if (why === "nopkg") { S.picking = true; renderPkgs(); toast("Choose a bundle first."); document.getElementById("pkgs").scrollIntoView({ behavior: "smooth" }); return; }
+      if (why === "over" || why === "full") { openUpgrade(id); return; }
       if (why !== "ok") return;
-      if (!S.signedIn) { toast(ERR.not_signed_in); return; }
-      t.disabled = true;
-      var r = await sb.rpc("hold_card", { p_card: id });
-      if (r.error) toast(errText(r.error));
-      else if (r.data && r.data.server_now) S.offset = Date.parse(r.data.server_now) - Date.now();
-      await refresh(); renderGrid(); renderCart(); renderPkgs();
+      await addCard(id, t);
     }
+    else if (a === "upgrade") { openUpgrade(id || null); }
     else if (a === "dec" || a === "remove") {
       t.disabled = true;
       var r2 = await sb.rpc("release_card", { p_card: id, p_all: a === "remove" });
