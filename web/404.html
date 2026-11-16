@@ -1,0 +1,33 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Page not found</title>
+<script>
+  // Old links pointed at /bundle-binder/web/... — send them to the same page without "web/".
+  (function () {
+    var p = location.pathname, m = p.match(/^(.*?\/)web(?:\/(.*))?$/);
+    if (m) location.replace(m[1] + (m[2] || "") + location.search + location.hash);
+  })();
+</script>
+<style>
+  body{margin:0;min-height:100vh;display:grid;place-items:center;font-family:system-ui,-apple-system,"Segoe UI",sans-serif;background:#ECEFF5;color:#151A2D;padding:16px}
+  @media (prefers-color-scheme: dark){body{background:#0E1120;color:#E7E9F3}a{color:#8E9BFF}}
+  main{text-align:center;max-width:420px}
+  a{color:#3343C4;font-weight:600}
+</style>
+</head>
+<body>
+<main>
+  <h1>Page not found</h1>
+  <p>That page doesn’t exist. Try the <a id="shop" href="./">card shop</a> or the <a id="admin" href="./admin.html">seller dashboard</a>.</p>
+</main>
+<script>
+  // Links work from any depth: point them at the site root (/bundle-binder/).
+  var root = (location.pathname.match(/^\/[^\/]+\//) || ["/"])[0];
+  document.getElementById("shop").href = root;
+  document.getElementById("admin").href = root + "admin.html";
+</script>
+</body>
+</html>
