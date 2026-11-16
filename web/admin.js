@@ -147,7 +147,7 @@
     renderBulk();
     el.innerHTML = list.slice(0, A.limit).map(function (c) {
       var f = function (k, label, input) { return '<label class="field">' + label + input + '</label>'; };
-      return '<div class="irow' + (A.sel[c.id] ? ' sel' : '') + '" data-id="' + c.id + '"><input type="checkbox" class="rowsel" aria-label="Select ' + esc(c.name) + '"' + (A.sel[c.id] ? ' checked' : '') + '><button class="thumbbtn" data-act="photo" data-id="' + c.id + '">' + (c.image_path ? '<img src="' + esc(imgUrl(c.image_path)) + '" alt="" loading="lazy">' : 'Add photo') + '</button><div class="ifields">'
+      return '<div class="irow' + (A.sel[c.id] ? ' sel' : '') + '" data-id="' + c.id + '"><input type="checkbox" class="rowsel" aria-label="Select ' + esc(c.name) + '"' + (A.sel[c.id] ? ' checked' : '') + '><div class="thumbcol"><button class="thumbbtn" data-act="photo" data-id="' + c.id + '">' + (c.image_path ? '<img src="' + esc(imgUrl(c.image_path)) + '" alt="" loading="lazy">' : 'Add photo') + '</button>' + (c.image_path ? '<button class="tiny" data-act="adjust" data-id="' + c.id + '" title="Straighten or re-crop this photo">Adjust</button><button class="tiny" data-act="rotate" data-id="' + c.id + '" title="Turn the photo a quarter turn">Rotate</button>' : '') + '</div><div class="ifields">'
         + f("name", "Name", '<input data-f="name" value="' + esc(c.name) + '">') + f("set_name", "Set", '<input data-f="set_name" value="' + esc(c.set_name) + '">') + f("number", "No.", '<input data-f="number" value="' + esc(c.number) + '">')
         + f("game", "Game", '<input data-f="game" value="' + esc(c.game) + '">') + f("condition", "Condition", '<select data-f="condition">' + condOpts(c.condition) + '</select>')
         + f("price", "Price", '<input data-f="price_cents" inputmode="decimal" value="' + (c.price_cents / 100).toFixed(2) + '">') + f("qty", "Qty", '<input data-f="qty" type="number" min="0" value="' + c.qty + '">')
@@ -189,6 +189,53 @@
     URL.revokeObjectURL(url);
     return await new Promise(function (r) { cv.toBlob(r, "image/jpeg", 0.88); });
   }
+  async function uploadBlob(blob) {
+    var path = "cards/" + (crypto.randomUUID ? crypto.randomUUID() : Date.now() + "-" + Math.random().toString(36).slice(2)) + ".jpg";
+    var r = await sb.storage.from("card-photos").upload(path, blob, { contentType: "image/jpeg", upsert: false });
+    if (r.error) throw r.error;
+    return path;
+  }
+  async function fetchPhoto(path) {
+    var res = await fetch(imgUrl(path), { cache: "no-store" });
+    if (!res.ok) throw new Error("couldn’t load the photo");
+    var b = await res.blob();
+    return new File([b], "photo.jpg", { type: b.type && /^image\//.test(b.type) ? b.type : "image/jpeg" });
+  }
+  async function loadImg(file) {
+    var url = URL.createObjectURL(file), im = new Image();
+    await new Promise(function (res, rej) { im.onload = res; im.onerror = rej; im.src = url; });
+    return { im: im, url: url };
+  }
+  // Adjust photo: re-crop from the original photo (or, for cards without one, from the current photo, auto-fitted)
+  async function adjustCard(id, btn) {
+    var c = A.cards.find(function (x) { return x.id === id; }), area = document.getElementById("split-area");
+    if (!c || !c.image_path || !area || !window.BBSplit) return;
+    if (btn) btn.disabled = true;
+    try {
+      var srcPath = c.src_path || c.image_path, file = await fetchPhoto(srcPath);
+      await window.BBSplit.open(file, area, async function (res) {
+        var newPath = await uploadBlob(res.blob), patch = { image_path: newPath, src_path: srcPath, src_box: res.box };
+        var r = await sb.from("cards").update(patch).eq("id", id); if (r.error) throw r.error;
+        Object.assign(c, patch); renderRows(); toast("Photo updated for " + (c.name || "that card") + ".");
+        var row = document.querySelector('.irow[data-id="' + id + '"]'); if (row) row.scrollIntoView({ behavior: "smooth", block: "center" });
+      }, { mode: "adjust", title: c.name, startBox: c.src_path && c.src_box ? c.src_box : null });
+    } catch (e) { toast("Couldn’t open that photo: " + (e.message || e)); }
+    if (btn) btn.disabled = false;
+  }
+  async function rotateCard(id, btn) {
+    var c = A.cards.find(function (x) { return x.id === id; }); if (!c || !c.image_path) return;
+    if (btn) { btn.disabled = true; btn.textContent = "Turning…"; }
+    try {
+      var li = await loadImg(await fetchPhoto(c.image_path)), im = li.im, w = im.naturalWidth, h = im.naturalHeight;
+      var cv = document.createElement("canvas"); cv.width = h; cv.height = w;
+      var cx = cv.getContext("2d"); cx.translate(h / 2, w / 2); cx.rotate(Math.PI / 2); cx.drawImage(im, -w / 2, -h / 2); URL.revokeObjectURL(li.url);
+      var blob = await new Promise(function (r) { cv.toBlob(r, "image/jpeg", 0.9); }), newPath = await uploadBlob(blob);
+      var patch = { image_path: newPath };
+      if (c.src_path && c.src_box) patch.src_box = Object.assign({}, c.src_box, { r: ((c.src_box.r || 0) + 90) % 360 });
+      var r = await sb.from("cards").update(patch).eq("id", id); if (r.error) throw r.error;
+      Object.assign(c, patch); renderRows();
+    } catch (e) { toast("Couldn’t turn that photo: " + (e.message || e)); if (btn) { btn.disabled = false; btn.textContent = "Rotate"; } }
+  }
   async function uploadPhoto(file) {
     var blob = await resize(file, 1100), path = "cards/" + (crypto.randomUUID ? crypto.randomUUID() : Date.now() + "-" + Math.random().toString(36).slice(2)) + ".jpg";
     var r = await sb.storage.from("card-photos").upload(path, blob, { contentType: "image/jpeg", upsert: false });
@@ -202,7 +249,7 @@
     var d = defaults(), done = 0, failed = 0, rows = [];
     for (var i = 0; i < files.length; i++) {
       A.up = "Uploading " + (i + 1) + " of " + files.length + "…"; var m = document.getElementById("upmsg"); if (m) m.textContent = A.up;
-      try { var path = await uploadPhoto(files[i]); rows.push(Object.assign({ name: files[i].name.replace(/\.[^.]+$/, "").replace(/[_-]+/g, " ").trim() || "New card", image_path: path, qty: 1 }, d)); done++; }
+      try { var path = await uploadPhoto(files[i]); rows.push(Object.assign({ name: files[i].name.replace(/\.[^.]+$/, "").replace(/[_-]+/g, " ").trim() || "New card", image_path: path, qty: 1 }, d, files[i].bbExtra || {})); done++; }
       catch (e) { failed++; }
     }
     if (rows.length) { var r = await sb.from("cards").insert(rows); if (r.error) { toast("Couldn’t save the cards: " + r.error.message); failed += rows.length; done = 0; } }
@@ -212,7 +259,16 @@
   // one photo of many cards → the splitter finds each card, the seller checks the boxes, each crop becomes a listing
   function openMany(file) {
     var area = document.getElementById("split-area"); if (!area || !window.BBSplit) return;
-    window.BBSplit.open(file, area, function (files) { return addPhotos(files); }).catch(function (e) { toast(e.message || "That photo couldn’t be opened."); });
+    window.BBSplit.open(file, area, async function (files, meta) {
+      if (meta && meta.original) {
+        try {
+          var m = document.getElementById("upmsg"); if (m) m.textContent = "Saving the original photo so you can re-crop later…";
+          var orig = await uploadBlob(meta.original);
+          files.forEach(function (f, i) { f.bbExtra = { src_path: orig, src_box: meta.boxes[i] }; });
+        } catch (e) { /* the cards still get listed; they just can't be re-cropped from the original */ }
+      }
+      return addPhotos(files);
+    }).catch(function (e) { toast(e.message || "That photo couldn’t be opened."); });
   }
   function parseCSV(text) {
     text = String(text || "").replace(/^﻿/, "");
@@ -288,6 +344,8 @@
       for (var i = 0; i < ids.length; i += 150) { var rd = await sb.from("cards").delete().in("id", ids.slice(i, i + 150)); if (rd.error) { toast(rd.error.message); break; } }
       toast("Deleted " + ids.length + " card" + (ids.length === 1 ? "" : "s") + "."); A.sel = {}; await loadCards(); renderInventory();
     }
+    else if (a === "adjust") { adjustCard(id, t); }
+    else if (a === "rotate") { rotateCard(id, t); }
     else if (a === "photo") { var of = document.getElementById("onefile"); of.dataset.id = id; of.value = ""; of.click(); }
     else if (a === "csv") { importCSV(document.getElementById("csv").value); }
     else if (a === "addbundle") { var nb = { id: "b" + Date.now().toString(36), name: "New Bundle", price_cents: 2000, value_cents: 2000, sort: A.bundles.length + 1 }; var r4 = await sb.from("bundles").insert(nb).select().single(); if (r4.data) A.bundles.push(r4.data); renderSettings(); }
@@ -326,7 +384,7 @@
     if (t.id === "files") { addPhotos(t.files); }
     if (t.id === "manyfile" && t.files[0]) openMany(t.files[0]);
     if (t.id === "csvfile" && t.files[0]) { var fr = new FileReader(); fr.onload = function () { importCSV(String(fr.result)); }; fr.readAsText(t.files[0]); }
-    if (t.id === "onefile" && t.files[0]) { try { var path = await uploadPhoto(t.files[0]); await saveCard(t.dataset.id, { image_path: path }); await loadCards(); renderRows(); } catch (er) { toast("Photo upload failed: " + (er.message || er)); } }
+    if (t.id === "onefile" && t.files[0]) { try { var path = await uploadPhoto(t.files[0]); await saveCard(t.dataset.id, { image_path: path, src_path: "", src_box: null }); await loadCards(); renderRows(); } catch (er) { toast("Photo upload failed: " + (er.message || er)); } }
   });
   app.addEventListener("dragover", function (e) { var d = e.target.closest && e.target.closest("#drop, #dropmany"); if (d) { e.preventDefault(); d.classList.add("over"); } });
   app.addEventListener("dragleave", function (e) { var d = e.target.closest && e.target.closest("#drop, #dropmany"); if (d) d.classList.remove("over"); });

@@ -110,7 +110,7 @@ Tip: do a test run first with Stripe's *test mode* keys (`sk_test_...`) and card
 - **Orders:** to-do list of orders awaiting payment and paid-to-ship, with buyer details, shipping address, a pull list
   with box locations, and buttons for *Mark paid*, *Mark shipped*, *Copy address* and *Cancel*. Also shows which cards are
   sitting in carts right now and how long is left.
-- **Inventory:** drop photos to add cards in bulk (one card per photo, or one photo of many cards that gets split into separate listings), import a spreadsheet, and edit name, set, number, game, condition, price,
+- **Inventory:** drop photos to add cards in bulk (one card per photo, or one photo of many cards that gets split into separate listings), straighten or re-crop any photo with **Adjust** (auto-fits the card; re-crops from the original photo when there is one) or turn it with **Rotate**, import a spreadsheet, and edit name, set, number, game, condition, price,
   quantity, status and box. Changes save as you type.
 - **Settings:** shop details, hold times, payment usernames, card payments, bundles and add-ons.
 

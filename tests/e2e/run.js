@@ -121,6 +121,13 @@ function serve() {
 async function newBuyer(browser, base, mock) {
   const ctx = await browser.newContext({ viewport: { width: 1280, height: 1000 } });
   await ctx.exposeFunction("__sb", handle);
+  const photos = new Map();
+  await ctx.exposeFunction("__store", (p, b64) => { photos.set(p, Buffer.from(b64, "base64")); });
+  await ctx.route("http://127.0.0.1:9/storage/v1/object/public/card-photos/**", (r) => {
+    const p = decodeURIComponent(new URL(r.request().url()).pathname.replace("/storage/v1/object/public/card-photos/", ""));
+    const body = photos.get(p);
+    return body ? r.fulfill({ status: 200, contentType: "image/jpeg", body, headers: { "Access-Control-Allow-Origin": "*" } }) : r.fulfill({ status: 404, body: "" });
+  });
   await ctx.route("https://cdn.jsdelivr.net/**", (r) => r.fulfill({ contentType: "text/javascript", body: mock }));
   await ctx.route("https://fonts.googleapis.com/**", (r) => r.fulfill({ contentType: "text/css", body: "" }));
   const page = await ctx.newPage();
@@ -243,6 +250,38 @@ const q1 = async (sql) => (await pool.query(sql)).rows[0];
   await S.waitForFunction(() => /Added 4 cards/.test((document.getElementById("upmsg") || {}).textContent || ""), null, { timeout: 15000 });
   const made = await q1("select count(*)::int n, count(*) filter (where image_path like 'cards/%')::int img from cards where name like 'shot group input%'");
   ok(made.n === 4 && made.img === 4, "each card in the photo becomes its own listing with its own photo");
+  const srcs = await pool.query("select name, image_path, src_path, src_box from cards where name like 'shot group input%' order by name");
+  ok(srcs.rows.every((r) => r.src_path && r.src_box && r.src_path === srcs.rows[0].src_path), "the original photo is saved once and every card remembers its crop box");
+
+  // Adjust photo: re-crop card 2 (the tilted one) from the original photo
+  const c2 = srcs.rows[1];
+  await S.click(`.irow:has(input[value="${c2.name}"]) [data-act="adjust"]`);
+  await S.waitForSelector("#split-stage .sbox");
+  const adjText = await S.textContent(".splitbox");
+  ok(adjText.includes("Adjust photo") && adjText.includes("saved crop") && (await S.locator("#split-stage .sbox").count()) === 1, "Adjust opens the original photo with the saved crop box");
+  const imgW = await S.evaluate(() => document.querySelector("#split-stage img").naturalWidth);
+  ok(imgW === 1600, "Adjust shows the whole original photo, not the cropped one" + (imgW === 1600 ? "" : " (width " + imgW + ")"));
+  await S.click('[data-split="go"]'); await S.waitForFunction(() => !document.querySelector("#split-area .splitbox"), null, { timeout: 10000 });
+  const c2b = await q1(`select image_path, src_path from cards where name = '${c2.name}'`);
+  ok(c2b.image_path !== c2.image_path && c2b.src_path === c2.src_path, "saving gives the card a new photo and keeps the same original");
+
+  // Auto adjust: a card with no saved original gets its box fitted automatically from its current photo
+  const c3 = srcs.rows[2];
+  await pool.query(`update cards set src_path = '', src_box = null where name = '${c3.name}'`);
+  await S.reload(); await S.waitForSelector('[data-act="tab"][data-tab="inventory"]'); await S.click('[data-act="tab"][data-tab="inventory"]'); await S.waitForSelector(".irow");
+  await S.click(`.irow:has(input[value="${c3.name}"]) [data-act="adjust"]`);
+  await S.waitForSelector("#split-stage .sbox");
+  ok((await S.textContent(".splitbox")).includes("Line the box up") && (await S.locator('[data-split="detect"]').textContent()) === "Auto adjust", "without an original, Adjust auto-fits the box (Auto adjust)");
+  await S.click('[data-split="go"]'); await S.waitForFunction(() => !document.querySelector("#split-area .splitbox"), null, { timeout: 10000 });
+  const c3b = await q1(`select image_path, src_path, src_box from cards where name = '${c3.name}'`);
+  ok(c3b.src_path === c3.image_path && c3b.src_box && c3b.image_path !== c3.image_path, "auto-adjusted photo saved; the previous photo becomes its original");
+
+  // Rotate a quarter turn
+  await S.click(`.irow:has(input[value="${c2.name}"]) [data-act="rotate"]`);
+  await S.waitForFunction((n) => { const r = document.querySelector('.irow input[value="' + n + '"]'); return r && !r.closest(".irow").querySelector('[data-act="rotate"]').disabled; }, c2.name, { timeout: 10000 });
+  await S.waitForTimeout(500);
+  const c2c = await q1(`select image_path, src_box from cards where name = '${c2.name}'`);
+  ok(c2c.image_path !== c2b.image_path && c2c.src_box.r === 90, "Rotate saves a turned photo and remembers the turn for future adjusts");
   await pool.query("delete from cards where name like 'shot group input%'");
   await S.click('[data-act="tab"][data-tab="settings"]'); await S.waitForSelector('[data-s="hold_minutes"]');
   await S.fill('[data-s="hold_minutes"]', "20"); await S.waitForTimeout(900);

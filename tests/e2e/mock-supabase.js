@@ -33,7 +33,11 @@
     },
     from: builder,
     rpc: function (name, args) { return call({ kind: "rpc", name: name, args: args || {} }); },
-    storage: { from: function () { return { upload: async function (path) { return { data: { path: path }, error: null }; } }; } },
+    storage: { from: function () { return { upload: async function (path, blob) {
+      // keep the bytes so the page can load the photo back (served by the test runner)
+      if (blob && blob.arrayBuffer && window.__store) { var u8 = new Uint8Array(await blob.arrayBuffer()), bin = ""; for (var i = 0; i < u8.length; i += 0x8000) bin += String.fromCharCode.apply(null, u8.subarray(i, i + 0x8000)); await window.__store(path, btoa(bin)); }
+      return { data: { path: path }, error: null };
+    } }; } },
     functions: { invoke: function (name, opts) { return call({ kind: "fn", name: name, args: (opts && opts.body) || {} }); } }
   };
   window.supabase = { createClient: function () { return client; } };

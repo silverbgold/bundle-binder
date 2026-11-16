@@ -35,8 +35,14 @@ create table if not exists cards (
   status      text not null default 'available' check (status in ('available','hidden','sold')),
   image_path  text not null default '',
   box         text not null default '',
+  src_path    text not null default '',   -- original (uncropped) photo, for Adjust photo
+  src_box     jsonb,                      -- crop box {cx,cy,w,h,a,r} in src_path pixels
   created_at  timestamptz not null default now()
 );
+
+-- upgrade older databases
+alter table cards add column if not exists src_path text not null default '';
+alter table cards add column if not exists src_box jsonb;
 
 create table if not exists bundles (
   id             text primary key,

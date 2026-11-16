@@ -209,6 +209,40 @@ async function cropBox(img, b){
   return await new Promise(function(r){ cv.toBlob(r, "image/jpeg", 0.9); });
 }
 
+function estimateTilt(img){
+  var sc = Math.min(1, 420 / Math.max(img.naturalWidth, img.naturalHeight)), w = Math.max(8, Math.round(img.naturalWidth*sc)), h = Math.max(8, Math.round(img.naturalHeight*sc));
+  var cv = document.createElement("canvas"); cv.width = w; cv.height = h; var cx = cv.getContext("2d"); cx.drawImage(img, 0, 0, w, h);
+  var d = cx.getImageData(0, 0, w, h).data, g = new Float32Array(w*h), hist = new Float32Array(91);
+  for (var i=0, k=0; i<d.length; i+=4, k++) g[k] = 0.3*d[i] + 0.59*d[i+1] + 0.11*d[i+2];
+  for (var y=1; y<h-1; y++) for (var x=1; x<w-1; x++){
+    var q = y*w + x, gx = g[q+1] - g[q-1], gy = g[q+w] - g[q-w], mag = Math.hypot(gx, gy);
+    if (mag < 40) continue;
+    var deg = Math.atan2(gy, gx) * 180 / Math.PI;
+    deg = ((deg % 90) + 90) % 90; if (deg > 45) deg -= 90;
+    hist[Math.round(deg) + 45] += mag;
+  }
+  var best = 45, bv = -1;
+  for (var j=0; j<91; j++){ var v = hist[j] + 0.5 * ((hist[j-1] || 0) + (hist[j+1] || 0)); if (v > bv){ bv = v; best = j; } }
+  var deg2 = best - 45;
+  return Math.abs(deg2) < 1 ? 0 : deg2 * Math.PI / 180;
+}
+
+// Adjust: fit one straight-or-tilted box to the single card in a photo.
+function autoFit(img) {
+  var W = img.naturalWidth, H = img.naturalHeight, found = [];
+  try { found = detectBoxes(img); } catch (e) { found = []; }
+  var big = found.slice().sort(function (a, b) { return b.w * b.h - a.w * a.h; })[0];
+  if (!big || big.w * big.h < 0.2 * W * H || (big.w * big.h > 0.8 * W * H && !big.a)) {
+    // the card fills the photo (or runs off it): measure the tilt from the card's printed lines and fit the biggest straight box
+    var tilt = estimateTilt(img), c1 = Math.abs(Math.cos(tilt)), s1 = Math.abs(Math.sin(tilt));
+    var A = W <= H ? 0.716 : 1, B = W <= H ? 1 : 0.716;
+    var kIn = Math.min(W / (A * c1 + B * s1), H / (A * s1 + B * c1)), kOut = Math.max((W * c1 + H * s1) / A, (W * s1 + H * c1) / B);
+    var k = kIn + 0.55 * (kOut - kIn);
+    big = { cx: W / 2, cy: H / 2, w: A * k, h: B * k, a: tilt, r: 0 };
+  }
+  return big;
+}
+
 /* ---------- editor: check the boxes, then cut each card out ---------- */
 function esc(s) { return String(s == null ? "" : s).replace(/[&<>"']/g, function (c) { return { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]; }); }
 var sp = null, host = null, onAdd = null, sdrag = null;
@@ -219,19 +253,26 @@ function countText() { var n = sp.boxes.length; return n + " card" + (n === 1 ? 
 function render() {
   if (!host) return;
   if (!sp) { host.innerHTML = ""; return; }
-  var n = sp.boxes.length;
-  host.innerHTML = '<section class="splitbox"><div class="row2"><h2>Photo of many cards</h2><span class="note" id="split-count">' + countText() + '</span></div>'
-    + '<div class="splittools"><button class="btn sm" data-split="detect"' + (sp.busy ? ' disabled' : '') + '>Find cards again</button>'
+  var n = sp.boxes.length, adj = sp.mode === "adjust", dis = sp.busy ? ' disabled' : '';
+  host.innerHTML = '<section class="splitbox"><div class="row2"><h2>' + (adj ? 'Adjust photo' + (sp.title ? ': ' + esc(sp.title) : '') : 'Photo of many cards') + '</h2><span class="note" id="split-count">' + countText() + '</span></div>'
+    + '<div class="splittools">' + (adj
+      ? '<button class="btn sm" data-split="detect"' + dis + '>Auto adjust</button>' + (sp.startBox ? '<button class="btn sm" data-split="reset"' + dis + '>Back to saved crop</button>' : '') + '<button class="btn ghost sm" data-split="clear"' + dis + '>Clear box</button></div>'
+      : '<button class="btn sm" data-split="detect"' + dis + '>Find cards again</button>'
     + '<span class="gridset"><label>Grid <input id="split-rows" type="number" min="1" max="10" value="' + sp.rows + '" aria-label="Rows"></label> × <input id="split-cols" type="number" min="1" max="10" value="' + sp.cols + '" aria-label="Columns"><button class="btn sm" data-split="grid"' + (sp.busy ? ' disabled' : '') + '>Use grid</button></span>'
-    + '<button class="btn ghost sm" data-split="clear"' + (sp.busy ? ' disabled' : '') + '>Clear boxes</button></div>'
+    + '<button class="btn ghost sm" data-split="clear"' + dis + '>Clear boxes</button></div>')
     + '<p class="note" role="status">' + esc(sp.msg) + '</p>'
     + '<div class="splitstage" id="split-stage" style="max-width:calc(68vh * ' + (sp.W / sp.H).toFixed(4) + ')"><img src="' + sp.url + '" alt="Photo of several cards" draggable="false">'
     + sp.boxes.map(function (b, i) { return '<div class="sbox" data-i="' + i + '" style="' + boxStyle(b) + '"><span class="sbox-n">' + (i + 1) + (b.r ? ' ↻' + b.r + '°' : '') + '</span><button class="sbox-t" data-split="turn" data-i="' + i + '" aria-label="Turn card ' + (i + 1) + ' a quarter turn" title="Turn a quarter turn">↻</button><button class="sbox-x" data-split="del" data-i="' + i + '" aria-label="Remove box ' + (i + 1) + '">×</button><span class="sbox-r" aria-hidden="true" title="Drag to tilt"></span><span class="sbox-h" aria-hidden="true" title="Drag to resize"></span></div>'; }).join("")
-    + '</div><div class="splitacts"><button class="btn primary" data-split="go"' + (n && !sp.busy ? '' : ' disabled') + '>' + (sp.busy ? 'Working…' : 'Add ' + n + ' card' + (n === 1 ? '' : 's')) + '</button><button class="btn ghost" data-split="cancel"' + (sp.busy ? ' disabled' : '') + '>Cancel</button>'
-    + '<span class="note">Each box becomes its own listing, straightened, using the default price, game, condition and box above.</span></div></section>';
+    + '</div><div class="splitacts"><button class="btn primary" data-split="go"' + (n && !sp.busy && (!adj || n === 1) ? '' : ' disabled') + '>' + (sp.busy ? 'Working…' : adj ? (n === 1 ? 'Save photo' : n ? 'Keep exactly one box to save' : 'Draw a box to save') : 'Add ' + n + ' card' + (n === 1 ? '' : 's')) + '</button><button class="btn ghost" data-split="cancel"' + dis + '>Cancel</button>'
+    + '<span class="note">' + (adj ? 'Saves a new, straightened photo for this card. You can adjust it again later from the same original photo.' : 'Each box becomes its own listing, straightened, using the default price, game, condition and box above. The original photo is kept so you can re-crop any card later.') + '</span></div></section>';
 }
 
 function detect() {
+  if (sp.mode === "adjust") {
+    var b = autoFit(sp.img); sp.boxes = [b];
+    sp.msg = (b.a ? "The card is tilted; the box follows it and the photo will be straightened. " : "") + "Line the box up with the card: drag to move, pull the corner dot to resize, drag the top dot to tilt, ↻ for a quarter turn. Then save.";
+    render(); return;
+  }
   var found = [];
   try { found = detectBoxes(sp.img); } catch (e) { found = []; }
   var tilted = found.filter(function (b) { return b.a; }).length;
@@ -242,16 +283,18 @@ function detect() {
 
 function close() { if (sp && sp.url) URL.revokeObjectURL(sp.url); sp = null; render(); }
 
-function open(file, container, addFn) {
-  host = container; onAdd = addFn;
+function open(file, container, addFn, opts) {
+  host = container; onAdd = addFn; opts = opts || {};
   if (!file || !/^image\//.test(file.type)) { return Promise.reject(new Error("Choose a photo (JPG, PNG or WebP).")); }
   if (sp && sp.url) URL.revokeObjectURL(sp.url);
   return new Promise(function (resolve, reject) {
     var url = URL.createObjectURL(file), im = new Image();
     im.onload = function () {
       sp = { url: url, img: im, W: im.naturalWidth, H: im.naturalHeight, boxes: [], rows: 3, cols: 3, msg: "", busy: false,
-             base: (file.name || "group").replace(/\.[^.]+$/, "").replace(/[^a-z0-9_-]+/gi, "-") || "group" };
-      detect();
+             base: (file.name || "group").replace(/\.[^.]+$/, "").replace(/[^a-z0-9_-]+/gi, "-") || "group",
+             mode: opts.mode === "adjust" ? "adjust" : "many", title: opts.title || "", startBox: opts.startBox ? Object.assign({ a: 0, r: 0 }, opts.startBox) : null };
+      if (sp.startBox) { sp.boxes = [Object.assign({}, sp.startBox)]; sp.msg = "This is the original photo with your saved crop. Move, resize, tilt or turn the box (or tap Auto adjust), then save to cut a new photo from it."; render(); }
+      else detect();
       host.scrollIntoView({ behavior: "smooth", block: "start" });
       resolve();
     };
@@ -262,14 +305,27 @@ function open(file, container, addFn) {
 
 async function go() {
   if (!sp || !sp.boxes.length || sp.busy) return;
+  if (sp.mode === "adjust") {
+    if (sp.boxes.length !== 1) return;
+    sp.busy = true; sp.msg = "Saving the adjusted photo…"; render();
+    var box = Object.assign({}, sp.boxes[0]), ablob = await cropBox(sp.img, box), acb = onAdd;
+    try { if (acb) await acb({ blob: ablob, box: box }); close(); }
+    catch (e) { if (sp) { sp.busy = false; sp.msg = "Couldn’t save the photo: " + (e.message || e) + ". Try again."; render(); } }
+    return;
+  }
   sp.busy = true; sp.msg = "Cutting out and straightening " + sp.boxes.length + " cards…"; render();
   var boxes = readingOrder(sp.boxes), files = [];
   for (var i = 0; i < boxes.length; i++) {
     var blob = await cropBox(sp.img, boxes[i]); if (!blob) continue;
     files.push(new File([blob], sp.base + "-" + String(i + 1).padStart(2, "0") + ".jpg", { type: "image/jpeg" }));
   }
+  // keep the whole photo (up to 2400px) so each card can be re-cropped from it later
+  var f = Math.min(1, 2400 / Math.max(sp.W, sp.H)), ocv = document.createElement("canvas");
+  ocv.width = Math.round(sp.W * f); ocv.height = Math.round(sp.H * f); ocv.getContext("2d").drawImage(sp.img, 0, 0, ocv.width, ocv.height);
+  var original = await new Promise(function (r) { ocv.toBlob(r, "image/jpeg", 0.9); });
+  var srcBoxes = boxes.map(function (b) { return { cx: b.cx * f, cy: b.cy * f, w: b.w * f, h: b.h * f, a: b.a || 0, r: b.r || 0 }; });
   var cb = onAdd; close();
-  if (cb) await cb(files);
+  if (cb) await cb(files, { original: original, boxes: srcBoxes });
 }
 
 function bind(container) {
@@ -282,7 +338,8 @@ function bind(container) {
       sp.rows = gr; sp.cols = gc; sp.boxes = gridBoxes(sp, gr, gc, { x: 0.01, y: 0.01, w: 0.98, h: 0.98 });
       sp.msg = "Split into a " + gr + " × " + gc + " grid. Drag the boxes to line them up with the cards."; render();
     }
-    else if (a === "clear") { sp.boxes = []; sp.msg = "Boxes cleared. Drag on the photo to draw a box around each card."; render(); }
+    else if (a === "clear") { sp.boxes = []; sp.msg = sp.mode === "adjust" ? "Box cleared. Drag on the photo to draw a box around the card." : "Boxes cleared. Drag on the photo to draw a box around each card."; render(); }
+    else if (a === "reset" && sp.startBox) { sp.boxes = [Object.assign({}, sp.startBox)]; sp.msg = "Back to your saved crop."; render(); }
     else if (a === "del") { sp.boxes.splice(i, 1); render(); }
     else if (a === "turn") { var b = sp.boxes[i]; if (b) { b.r = ((b.r || 0) + 90) % 360; render(); } }
     else if (a === "go") go();
@@ -333,7 +390,8 @@ function bind(container) {
 
 window.BBSplit = {
   // Opens the editor for one photo inside `container`. When the seller confirms, addFn(files) gets one JPEG File per card.
-  open: function (file, container, addFn) { if (!container.__bbBound) { bind(container); container.__bbBound = true; } return open(file, container, addFn); },
+  // opts: { mode: "adjust", title, startBox } edits one card's photo; addFn({ blob, box }) gets the new crop.
+  open: function (file, container, addFn, opts) { if (!container.__bbBound) { bind(container); container.__bbBound = true; } return open(file, container, addFn, opts); },
   isOpen: function () { return !!sp; },
   detectBoxes: detectBoxes
 };
