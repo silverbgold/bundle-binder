@@ -35,6 +35,7 @@
 .thumbcol .tiny{border:1px solid var(--line);background:var(--surface);color:var(--ink);border-radius:5px;font-size:11px;font-weight:600;padding:3px 0;cursor:pointer;width:100%}
 .thumbcol .tiny:hover{border-color:var(--accent);color:var(--accent)}
 .thumbcol .tiny:disabled{opacity:.6;cursor:default}
+.thumbcol .tiny[aria-disabled="true"]{opacity:.45}
 .drops{display:grid;grid-template-columns:1fr 1fr;gap:12px}
 @media (max-width:640px){.drops{grid-template-columns:1fr}}
 .drop:hover{border-color:var(--muted)}

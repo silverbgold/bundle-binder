@@ -282,6 +282,19 @@ const q1 = async (sql) => (await pool.query(sql)).rows[0];
   await S.waitForTimeout(500);
   const c2c = await q1(`select image_path, src_box from cards where name = '${c2.name}'`);
   ok(c2c.image_path !== c2b.image_path && c2c.src_box.r === 90, "Rotate saves a turned photo and remembers the turn for future adjusts");
+
+  // Rotate selected: turn a whole batch at once
+  const before = (await pool.query("select name, image_path from cards where name like 'shot group input%' order by name")).rows;
+  await S.fill("#iq", "shot group input"); await S.check("#selall");
+  await S.click('[data-act="bulkrotate"]');
+  await S.waitForFunction(() => /Turned \d+ photo/.test((document.getElementById("toast") || {}).textContent || ""), null, { timeout: 15000 });
+  const after = (await pool.query("select name, image_path from cards where name like 'shot group input%' order by name")).rows;
+  ok(after.length === 4 && after.every((r, i) => r.image_path !== before[i].image_path), "Rotate selected turns every selected photo");
+  await S.click('[data-act="selnone"]'); await S.fill("#iq", "");
+
+  // cards without a photo still show the buttons, with a hint
+  await S.click('.irow:has(input[value="Lightning Bolt"]) [data-act="rotate"]', { force: true });
+  ok(/Add a photo first/.test(await S.textContent(".toast")), "Rotate on a card with no photo says to add a photo first");
   await pool.query("delete from cards where name like 'shot group input%'");
   await S.click('[data-act="tab"][data-tab="settings"]'); await S.waitForSelector('[data-s="hold_minutes"]');
   await S.fill('[data-s="hold_minutes"]', "20"); await S.waitForTimeout(900);

@@ -128,6 +128,7 @@
       + '<span class="bk"><input id="bk-game" placeholder="Game" aria-label="New game"><button class="btn sm" data-act="bulk" data-k="game">Set game</button></span>'
       + '<span class="bk"><input id="bk-box" placeholder="Box" aria-label="New box"><button class="btn sm" data-act="bulk" data-k="box">Set box</button></span>'
       + '<span class="bk"><input id="bk-qty" type="number" min="0" placeholder="Qty" aria-label="New quantity" style="width:70px"><button class="btn sm" data-act="bulk" data-k="qty">Set qty</button></span>'
+      + '<button class="btn sm" data-act="bulkrotate" title="Turn every selected photo a quarter turn clockwise">Rotate selected</button>'
       + '<button class="btn sm danger" data-act="bulkdel">Delete ' + n + '</button><button class="btn sm ghost" data-act="selnone">Clear</button></div>';
     el.innerHTML = h;
     var sa = document.getElementById("selall"); if (sa) sa.indeterminate = inView > 0 && !all;
@@ -147,7 +148,7 @@
     renderBulk();
     el.innerHTML = list.slice(0, A.limit).map(function (c) {
       var f = function (k, label, input) { return '<label class="field">' + label + input + '</label>'; };
-      return '<div class="irow' + (A.sel[c.id] ? ' sel' : '') + '" data-id="' + c.id + '"><input type="checkbox" class="rowsel" aria-label="Select ' + esc(c.name) + '"' + (A.sel[c.id] ? ' checked' : '') + '><div class="thumbcol"><button class="thumbbtn" data-act="photo" data-id="' + c.id + '">' + (c.image_path ? '<img src="' + esc(imgUrl(c.image_path)) + '" alt="" loading="lazy">' : 'Add photo') + '</button>' + (c.image_path ? '<button class="tiny" data-act="adjust" data-id="' + c.id + '" title="Straighten or re-crop this photo">Adjust</button><button class="tiny" data-act="rotate" data-id="' + c.id + '" title="Turn the photo a quarter turn">Rotate</button>' : '') + '</div><div class="ifields">'
+      return '<div class="irow' + (A.sel[c.id] ? ' sel' : '') + '" data-id="' + c.id + '"><input type="checkbox" class="rowsel" aria-label="Select ' + esc(c.name) + '"' + (A.sel[c.id] ? ' checked' : '') + '><div class="thumbcol"><button class="thumbbtn" data-act="photo" data-id="' + c.id + '">' + (c.image_path ? '<img src="' + esc(imgUrl(c.image_path)) + '" alt="" loading="lazy">' : 'Add photo') + '</button>' + '<button class="tiny" data-act="adjust" data-id="' + c.id + '" title="Straighten or re-crop this photo"' + (c.image_path ? '' : ' aria-disabled="true"') + '>Adjust</button><button class="tiny" data-act="rotate" data-id="' + c.id + '" title="Turn the photo a quarter turn clockwise"' + (c.image_path ? '' : ' aria-disabled="true"') + '>Rotate</button>' + '</div><div class="ifields">'
         + f("name", "Name", '<input data-f="name" value="' + esc(c.name) + '">') + f("set_name", "Set", '<input data-f="set_name" value="' + esc(c.set_name) + '">') + f("number", "No.", '<input data-f="number" value="' + esc(c.number) + '">')
         + f("game", "Game", '<input data-f="game" value="' + esc(c.game) + '">') + f("condition", "Condition", '<select data-f="condition">' + condOpts(c.condition) + '</select>')
         + f("price", "Price", '<input data-f="price_cents" inputmode="decimal" value="' + (c.price_cents / 100).toFixed(2) + '">') + f("qty", "Qty", '<input data-f="qty" type="number" min="0" value="' + c.qty + '">')
@@ -222,8 +223,8 @@
     } catch (e) { toast("Couldn’t open that photo: " + (e.message || e)); }
     if (btn) btn.disabled = false;
   }
-  async function rotateCard(id, btn) {
-    var c = A.cards.find(function (x) { return x.id === id; }); if (!c || !c.image_path) return;
+  async function rotateCard(id, btn, quiet) {
+    var c = A.cards.find(function (x) { return x.id === id; }); if (!c || !c.image_path) return false;
     if (btn) { btn.disabled = true; btn.textContent = "Turning…"; }
     try {
       var li = await loadImg(await fetchPhoto(c.image_path)), im = li.im, w = im.naturalWidth, h = im.naturalHeight;
@@ -233,8 +234,9 @@
       var patch = { image_path: newPath };
       if (c.src_path && c.src_box) patch.src_box = Object.assign({}, c.src_box, { r: ((c.src_box.r || 0) + 90) % 360 });
       var r = await sb.from("cards").update(patch).eq("id", id); if (r.error) throw r.error;
-      Object.assign(c, patch); renderRows();
-    } catch (e) { toast("Couldn’t turn that photo: " + (e.message || e)); if (btn) { btn.disabled = false; btn.textContent = "Rotate"; } }
+      Object.assign(c, patch); if (!quiet) renderRows();
+      return true;
+    } catch (e) { if (!quiet) toast("Couldn’t turn that photo: " + (e.message || e)); if (btn) { btn.disabled = false; btn.textContent = "Rotate"; } return false; }
   }
   async function uploadPhoto(file) {
     var blob = await resize(file, 1100), path = "cards/" + (crypto.randomUUID ? crypto.randomUUID() : Date.now() + "-" + Math.random().toString(36).slice(2)) + ".jpg";
@@ -344,8 +346,16 @@
       for (var i = 0; i < ids.length; i += 150) { var rd = await sb.from("cards").delete().in("id", ids.slice(i, i + 150)); if (rd.error) { toast(rd.error.message); break; } }
       toast("Deleted " + ids.length + " card" + (ids.length === 1 ? "" : "s") + "."); A.sel = {}; await loadCards(); renderInventory();
     }
+    else if ((a === "adjust" || a === "rotate") && t.getAttribute("aria-disabled") === "true") { toast("Add a photo first: tap the empty photo box on this card."); }
     else if (a === "adjust") { adjustCard(id, t); }
     else if (a === "rotate") { rotateCard(id, t); }
+    else if (a === "bulkrotate") {
+      var withPhoto = selIds().filter(function (sid) { var sc = A.cards.find(function (x) { return x.id === sid; }); return sc && sc.image_path; });
+      if (!withPhoto.length) { toast("None of the selected cards have a photo yet."); return; }
+      t.disabled = true; var turned = 0;
+      for (var ri = 0; ri < withPhoto.length; ri++) { t.textContent = "Turning " + (ri + 1) + " of " + withPhoto.length + "…"; if (await rotateCard(withPhoto[ri], null, true)) turned++; }
+      renderRows(); toast("Turned " + turned + " photo" + (turned === 1 ? "" : "s") + (turned < withPhoto.length ? "; " + (withPhoto.length - turned) + " couldn’t be turned" : "") + ".");
+    }
     else if (a === "photo") { var of = document.getElementById("onefile"); of.dataset.id = id; of.value = ""; of.click(); }
     else if (a === "csv") { importCSV(document.getElementById("csv").value); }
     else if (a === "addbundle") { var nb = { id: "b" + Date.now().toString(36), name: "New Bundle", price_cents: 2000, value_cents: 2000, sort: A.bundles.length + 1 }; var r4 = await sb.from("bundles").insert(nb).select().single(); if (r4.data) A.bundles.push(r4.data); renderSettings(); }
