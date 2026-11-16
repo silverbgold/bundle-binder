@@ -10,7 +10,7 @@
   var sb = window.supabase.createClient(cfg.supabaseUrl, cfg.supabaseAnonKey);
   var CONDS = [["M", "Mint"], ["NM", "Near Mint"], ["LP", "Lightly Played"], ["MP", "Moderately Played"], ["HP", "Heavily Played"], ["DMG", "Damaged"], ["GR", "Graded"]];
   var STATUS = { awaiting_payment: ["Awaiting payment", "warn"], paid: ["Paid · ship it", "ok"], shipped: ["Shipped", "acc"], cancelled: ["Cancelled", ""], expired: ["Expired", "bad"] };
-  var A = { tab: "orders", filter: "open", orders: [], holds: [], cards: [], settings: null, bundles: [], addons: [], q: "", limit: 100, msg: "", up: "" };
+  var A = { tab: "orders", filter: "open", orders: [], holds: [], cards: [], settings: null, bundles: [], addons: [], q: "", limit: 100, sel: {}, msg: "", up: "" };
 
   function esc(s) { return String(s == null ? "" : s).replace(/[&<>"']/g, function (c) { return { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]; }); }
   function money(c) { var sym = (A.settings && A.settings.currency_symbol) || "$"; c = Math.round(c || 0); return sym + (Math.floor(c / 100)).toLocaleString("en-US") + "." + String(c % 100).padStart(2, "0"); }
@@ -108,16 +108,44 @@
       + '<div class="drop" id="drop" tabindex="0" role="button"><b>Drop card photos here</b><br><span class="note">or click to choose. Each photo becomes a listing named after its file; edit names below.</span></div><input type="file" id="files" accept="image/*" multiple hidden>'
       + '<details><summary class="note" style="cursor:pointer">Import from a spreadsheet (CSV)</summary><p class="note">Columns: name (required), set, number, game, condition, price, qty, box, photo (a web address). Paste from Excel or Google Sheets, or choose a file.</p><textarea id="csv" rows="5" style="width:100%"></textarea><div class="toolbar"><button class="btn sm" data-act="csv">Import rows</button><input type="file" id="csvfile" accept=".csv,.tsv,.txt"></div></details>'
       + '<button class="btn sm" data-act="addblank" style="align-self:flex-start">Add a card without a photo</button><p class="note" id="upmsg" role="status">' + esc(A.up) + '</p></section>'
-      + '<section class="panel"><div class="row2"><h2>Inventory <span class="note" style="display:inline">(' + A.cards.length + ' listings, ' + forSale + ' for sale)</span></h2><input id="iq" type="search" placeholder="Filter" value="' + esc(A.q) + '" style="padding:8px 10px;border:1px solid var(--line);border-radius:8px;background:var(--surface)"></div><div class="ilist" id="ilist" style="margin-top:12px"></div></section>'
+      + '<section class="panel"><div class="row2"><h2>Inventory <span class="note" style="display:inline">(' + A.cards.length + ' listings, ' + forSale + ' for sale)</span></h2><input id="iq" type="search" placeholder="Filter" value="' + esc(A.q) + '" style="padding:8px 10px;border:1px solid var(--line);border-radius:8px;background:var(--surface)"></div><div id="ibulk" class="ibulk"></div><div class="ilist" id="ilist"></div></section>'
       + '<input type="file" id="onefile" accept="image/*" hidden>';
     renderRows();
   }
+  function filtered() { var q = A.q.trim().toLowerCase(); return A.cards.filter(function (c) { return !q || (c.name + " " + c.set_name + " " + c.number + " " + c.game + " " + c.box).toLowerCase().indexOf(q) >= 0; }); }
+  function selIds() { var have = {}; A.cards.forEach(function (c) { have[c.id] = 1; }); return Object.keys(A.sel).filter(function (id) { return A.sel[id] && have[id]; }); }
+  function renderBulk() {
+    var el = document.getElementById("ibulk"); if (!el) return;
+    var list = filtered(), ids = selIds(), n = ids.length, inView = list.filter(function (c) { return A.sel[c.id]; }).length;
+    var all = list.length > 0 && inView === list.length;
+    var h = '<label class="selall"><input type="checkbox" id="selall"' + (all ? ' checked' : '') + (list.length ? '' : ' disabled') + '> Select all' + (A.q.trim() ? ' matching' : '') + ' (' + list.length + ')</label>';
+    if (n) h += '<div class="bulkbar" role="region" aria-label="Change selected cards"><b>' + n + ' selected</b>'
+      + '<span class="bk"><input id="bk-price" inputmode="decimal" placeholder="Price" aria-label="New price"><button class="btn sm" data-act="bulk" data-k="price_cents">Set price</button></span>'
+      + '<span class="bk"><select id="bk-status" aria-label="New status"><option value="">Status…</option><option value="available">For sale</option><option value="hidden">Hidden</option><option value="sold">Sold</option></select></span>'
+      + '<span class="bk"><select id="bk-condition" aria-label="New condition"><option value="">Condition…</option>' + condOpts("") + '</select></span>'
+      + '<span class="bk"><input id="bk-game" placeholder="Game" aria-label="New game"><button class="btn sm" data-act="bulk" data-k="game">Set game</button></span>'
+      + '<span class="bk"><input id="bk-box" placeholder="Box" aria-label="New box"><button class="btn sm" data-act="bulk" data-k="box">Set box</button></span>'
+      + '<span class="bk"><input id="bk-qty" type="number" min="0" placeholder="Qty" aria-label="New quantity" style="width:70px"><button class="btn sm" data-act="bulk" data-k="qty">Set qty</button></span>'
+      + '<button class="btn sm danger" data-act="bulkdel">Delete ' + n + '</button><button class="btn sm ghost" data-act="selnone">Clear</button></div>';
+    el.innerHTML = h;
+    var sa = document.getElementById("selall"); if (sa) sa.indeterminate = inView > 0 && !all;
+  }
+  async function bulkUpdate(patch, label) {
+    var ids = selIds(); if (!ids.length) return;
+    for (var i = 0; i < ids.length; i += 150) {
+      var chunk = ids.slice(i, i + 150), r = await sb.from("cards").update(patch).in("id", chunk);
+      if (r.error) { toast("Didn’t save: " + r.error.message); break; }
+    }
+    A.cards.forEach(function (c) { if (A.sel[c.id]) Object.assign(c, patch); });
+    toast(label + " for " + ids.length + " card" + (ids.length === 1 ? "" : "s") + "."); renderRows();
+  }
   function renderRows() {
     var el = document.getElementById("ilist"); if (!el) return;
-    var q = A.q.trim().toLowerCase(), list = A.cards.filter(function (c) { return !q || (c.name + " " + c.set_name + " " + c.number + " " + c.game + " " + c.box).toLowerCase().indexOf(q) >= 0; });
+    var list = filtered();
+    renderBulk();
     el.innerHTML = list.slice(0, A.limit).map(function (c) {
       var f = function (k, label, input) { return '<label class="field">' + label + input + '</label>'; };
-      return '<div class="irow" data-id="' + c.id + '"><button class="thumbbtn" data-act="photo" data-id="' + c.id + '">' + (c.image_path ? '<img src="' + esc(imgUrl(c.image_path)) + '" alt="" loading="lazy">' : 'Add photo') + '</button><div class="ifields">'
+      return '<div class="irow' + (A.sel[c.id] ? ' sel' : '') + '" data-id="' + c.id + '"><input type="checkbox" class="rowsel" aria-label="Select ' + esc(c.name) + '"' + (A.sel[c.id] ? ' checked' : '') + '><button class="thumbbtn" data-act="photo" data-id="' + c.id + '">' + (c.image_path ? '<img src="' + esc(imgUrl(c.image_path)) + '" alt="" loading="lazy">' : 'Add photo') + '</button><div class="ifields">'
         + f("name", "Name", '<input data-f="name" value="' + esc(c.name) + '">') + f("set_name", "Set", '<input data-f="set_name" value="' + esc(c.set_name) + '">') + f("number", "No.", '<input data-f="number" value="' + esc(c.number) + '">')
         + f("game", "Game", '<input data-f="game" value="' + esc(c.game) + '">') + f("condition", "Condition", '<select data-f="condition">' + condOpts(c.condition) + '</select>')
         + f("price", "Price", '<input data-f="price_cents" inputmode="decimal" value="' + (c.price_cents / 100).toFixed(2) + '">') + f("qty", "Qty", '<input data-f="qty" type="number" min="0" value="' + c.qty + '">')
@@ -239,6 +267,20 @@
       if (t.getAttribute("data-armed") !== "1") { t.setAttribute("data-armed", "1"); t.textContent = "Confirm"; return; }
       var r3 = await sb.from("cards").delete().eq("id", id); if (r3.error) toast(r3.error.message); await loadCards(); renderRows();
     }
+    else if (a === "selnone") { A.sel = {}; renderRows(); }
+    else if (a === "bulk") {
+      var k = t.getAttribute("data-k"), inp = document.getElementById("bk-" + (k === "price_cents" ? "price" : k)), raw = inp.value.trim();
+      if (k === "price_cents") { if (!raw || toCents(raw) <= 0 && raw.replace(/[^0-9]/g, "") === "") { toast("Type a price first."); inp.focus(); return; } bulkUpdate({ price_cents: toCents(raw) }, "Price set to " + money(toCents(raw))); }
+      else if (k === "qty") { if (raw === "") { toast("Type a quantity first."); inp.focus(); return; } bulkUpdate({ qty: Math.max(0, parseInt(raw, 10) || 0) }, "Quantity set"); }
+      else bulkUpdate((function () { var p = {}; p[k] = raw; return p; })(), (k === "game" ? "Game" : "Box") + (raw ? " set" : " cleared"));
+    }
+    else if (a === "bulkdel") {
+      var ids = selIds();
+      if (t.getAttribute("data-armed") !== "1") { t.setAttribute("data-armed", "1"); t.textContent = "Confirm delete " + ids.length; return; }
+      t.disabled = true;
+      for (var i = 0; i < ids.length; i += 150) { var rd = await sb.from("cards").delete().in("id", ids.slice(i, i + 150)); if (rd.error) { toast(rd.error.message); break; } }
+      toast("Deleted " + ids.length + " card" + (ids.length === 1 ? "" : "s") + "."); A.sel = {}; await loadCards(); renderInventory();
+    }
     else if (a === "photo") { var of = document.getElementById("onefile"); of.dataset.id = id; of.value = ""; of.click(); }
     else if (a === "csv") { importCSV(document.getElementById("csv").value); }
     else if (a === "addbundle") { var nb = { id: "b" + Date.now().toString(36), name: "New Bundle", price_cents: 2000, value_cents: 2000, sort: A.bundles.length + 1 }; var r4 = await sb.from("bundles").insert(nb).select().single(); if (r4.data) A.bundles.push(r4.data); renderSettings(); }
@@ -271,6 +313,9 @@
     if (t.tagName === "SELECT" && t.getAttribute("data-f")) { var id = t.closest(".irow").getAttribute("data-id"); var p = {}; p[t.getAttribute("data-f")] = t.value; saveCard(id, p); }
     if (t.type === "checkbox" && t.getAttribute("data-s")) saveSettings({ card_payments: t.checked });
     if (t.tagName === "SELECT" && (t.getAttribute("data-b") || t.getAttribute("data-a"))) { var bk = t.getAttribute("data-b"), tbl = bk ? "bundles" : "addons", rid = t.closest(bk ? "[data-bid]" : "[data-aid]").getAttribute(bk ? "data-bid" : "data-aid"); await sb.from(tbl).update({ active: t.value === "true" }).eq("id", rid); }
+    if (t.id === "selall") { var vis = filtered(); vis.forEach(function (c) { if (t.checked) A.sel[c.id] = true; else delete A.sel[c.id]; }); renderRows(); return; }
+    if (t.classList && t.classList.contains("rowsel")) { var row = t.closest(".irow"), rid2 = row.getAttribute("data-id"); if (t.checked) A.sel[rid2] = true; else delete A.sel[rid2]; row.classList.toggle("sel", t.checked); renderBulk(); return; }
+    if ((t.id === "bk-status" || t.id === "bk-condition") && t.value) { var key = t.id.slice(3), pv = {}; pv[key] = t.value; var lab = t.options[t.selectedIndex].text; bulkUpdate(pv, (key === "status" ? "Status" : "Condition") + " set to " + lab); return; }
     if (t.id === "files") { addPhotos(t.files); }
     if (t.id === "csvfile" && t.files[0]) { var fr = new FileReader(); fr.onload = function () { importCSV(String(fr.result)); }; fr.readAsText(t.files[0]); }
     if (t.id === "onefile" && t.files[0]) { try { var path = await uploadPhoto(t.files[0]); await saveCard(t.dataset.id, { image_path: path }); await loadCards(); renderRows(); } catch (er) { toast("Photo upload failed: " + (er.message || er)); } }

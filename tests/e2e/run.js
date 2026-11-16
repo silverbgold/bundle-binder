@@ -58,7 +58,10 @@ async function rpc(c, name, args) {
 }
 async function table(c, q) {
   const t = ident(q.table), params = [];
-  const whereSql = () => { const w = q.filters.map((f) => f.op === "is" ? `${ident(f.col)} is null` : (params.push(val(f.val)), `${ident(f.col)} ${f.op === "gt" ? ">" : "="} $${params.length}`)); return w.length ? " where " + w.join(" and ") : ""; };
+  const cond = (f) => f.op === "is" ? `${ident(f.col)} is null`
+    : f.op === "in" ? (params.push(f.val), `${ident(f.col)}::text = any($${params.length}::text[])`)
+    : (params.push(val(f.val)), `${ident(f.col)} ${f.op === "gt" ? ">" : "="} $${params.length}`);
+  const whereSql = () => { const w = q.filters.map(cond); return w.length ? " where " + w.join(" and ") : ""; };
   const W = q.action === "select" || q.action === "delete" ? whereSql() : "";
   let rows;
   if (q.action === "select") {
@@ -77,7 +80,7 @@ async function table(c, q) {
     }
   } else if (q.action === "update") {
     const keys = Object.keys(q.values), set = keys.map((k) => (params.push(val(q.values[k])), `${ident(k)} = $${params.length}`));
-    const W2 = q.filters.map((f) => (params.push(val(f.val)), `${ident(f.col)} = $${params.length}`)).join(" and ");
+    const W2 = q.filters.map(cond).join(" and ");
     rows = (await c.query(`update public.${t} set ${set.join(", ")}${W2 ? " where " + W2 : ""} returning *`, params)).rows;
   } else if (q.action === "insert") {
     const list = Array.isArray(q.values) ? q.values : [q.values], keys = [...new Set(list.flatMap(Object.keys))];
@@ -197,6 +200,23 @@ const q1 = async (sql) => (await pool.query(sql)).rows[0];
   await S.waitForTimeout(1500);
   const pr = (await q1("select price_cents from cards where name = 'Dark Magician'")).price_cents;
   ok(pr === 4000, "editing a price in the dashboard saves it" + (pr === 4000 ? "" : " (got " + pr + "; toast: " + (await S.evaluate(() => (document.getElementById("toast") || {}).textContent)) + ")"));
+
+  // select all + bulk actions
+  await S.check("#selall");
+  ok((await S.locator(".irow.sel").count()) === 3 && (await S.textContent(".bulkbar")).includes("3 selected"), "Select all ticks every card and shows the bulk bar");
+  await S.emulateMedia({ colorScheme: "dark" }); await S.screenshot({ path: path.join(__dirname, "shot-inventory.png") }); await S.emulateMedia({ colorScheme: "light" });
+  await S.fill("#bk-box", "Shelf 9"); await S.click('[data-act="bulk"][data-k="box"]'); await S.waitForTimeout(800);
+  ok((await q1("select count(*)::int n from cards where box = 'Shelf 9'")).n === 3, "Set box changes all selected cards");
+  await S.click('[data-act="selnone"]');
+  ok((await S.locator(".irow.sel").count()) === 0 && (await S.locator(".bulkbar").count()) === 0, "Clear unselects everything");
+  await S.click('[data-act="addblank"]'); await S.waitForSelector('.irow input[value="New card"]');
+  await S.fill("#iq", "New card"); await S.check("#selall");
+  ok((await S.textContent(".selall")).includes("(1)") && (await S.textContent(".bulkbar")).includes("1 selected"), "Select all with a filter only picks the matching cards");
+  await S.selectOption("#bk-status", "hidden"); await S.waitForTimeout(800);
+  ok((await q1("select status from cards where name = 'New card'")).status === "hidden", "bulk status change saves");
+  await S.click('[data-act="bulkdel"]'); await S.click('[data-act="bulkdel"]'); await S.waitForTimeout(1000);
+  ok((await q1("select count(*)::int n from cards")).n === 3 && (await q1("select count(*)::int n from cards where name = 'New card'")).n === 0, "bulk delete (after confirm) removes only the selected card");
+  await S.fill("#iq", "");
   await S.click('[data-act="tab"][data-tab="settings"]'); await S.waitForSelector('[data-s="hold_minutes"]');
   await S.fill('[data-s="hold_minutes"]', "20"); await S.waitForTimeout(900);
   ok((await q1("select hold_minutes from settings")).hold_minutes === 20, "seller can change the hold time");

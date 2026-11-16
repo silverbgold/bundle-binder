@@ -16,7 +16,15 @@
 .ocard h3{margin:0;font-size:16px}
 .ocard ul{margin:6px 0 0;padding-left:18px;font-size:13.5px}
 .oacts{display:flex;flex-direction:column;gap:6px;align-items:stretch;min-width:150px}
-.irow{display:grid;grid-template-columns:56px minmax(0,1fr) auto;gap:12px;align-items:start;border:1px solid var(--line);border-radius:12px;padding:10px;background:var(--surface)}
+.irow{display:grid;grid-template-columns:20px 56px minmax(0,1fr) auto;gap:12px;align-items:start;border:1px solid var(--line);border-radius:12px;padding:10px;background:var(--surface)}
+.irow .rowsel{width:18px;height:18px;margin:6px 0 0;accent-color:var(--accent);cursor:pointer}
+.irow.sel{border-color:var(--accent);background:var(--accent-soft)}
+.ibulk{display:flex;flex-direction:column;gap:8px;margin:12px 0}
+.selall{display:inline-flex;align-items:center;gap:8px;font-weight:600;font-size:14px;cursor:pointer;align-self:flex-start}
+.selall input{width:18px;height:18px;accent-color:var(--accent)}
+.bulkbar{display:flex;flex-wrap:wrap;align-items:center;gap:8px;padding:10px 12px;border:1px solid var(--accent);border-radius:10px;background:var(--accent-soft);position:sticky;top:8px;z-index:5}
+.bulkbar .bk{display:inline-flex;gap:4px}
+.bulkbar input,.bulkbar select{padding:6px 8px;border:1px solid var(--line);border-radius:7px;background:var(--surface);color:var(--ink);font-size:13px;width:110px}
 .irow .thumbbtn{width:56px;aspect-ratio:63/88;border:1px dashed var(--line);border-radius:5px;background:var(--sunken);overflow:hidden;padding:0;cursor:pointer;font-size:10px;color:var(--muted)}
 .irow .thumbbtn img{width:100%;height:100%;object-fit:cover;display:block}
 .ifields{display:grid;grid-template-columns:2fr 1.4fr .7fr 1.1fr .9fr .8fr .6fr 1fr 1fr;gap:8px}
@@ -27,7 +35,7 @@
 .holdlist{list-style:none;margin:0;padding:0;font-size:13.5px;display:flex;flex-direction:column;gap:4px}
 .holdlist li{display:flex;justify-content:space-between;gap:10px;border-bottom:1px dashed var(--line);padding:3px 0}
 @media (max-width:1100px){.ifields{grid-template-columns:repeat(4,minmax(0,1fr))}}
-@media (max-width:760px){.ocard{grid-template-columns:minmax(0,1fr)}.ifields{grid-template-columns:repeat(2,minmax(0,1fr))}.brow{grid-template-columns:1fr 1fr}.irow{grid-template-columns:56px minmax(0,1fr)}}
+@media (max-width:760px){.ocard{grid-template-columns:minmax(0,1fr)}.ifields{grid-template-columns:repeat(2,minmax(0,1fr))}.brow{grid-template-columns:1fr 1fr}.irow{grid-template-columns:20px 56px minmax(0,1fr)}.irow>.btn.danger{grid-column:3;justify-self:start}}
 </style>
 </head>
 <body>

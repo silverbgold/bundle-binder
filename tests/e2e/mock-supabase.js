@@ -10,6 +10,7 @@
       eq: function (c, v) { q.filters.push({ op: "eq", col: c, val: v }); return b; },
       is: function (c, v) { q.filters.push({ op: "is", col: c, val: v }); return b; },
       gt: function (c, v) { q.filters.push({ op: "gt", col: c, val: v }); return b; },
+      in: function (c, v) { q.filters.push({ op: "in", col: c, val: v }); return b; },
       order: function (c, o) { q.order = { col: c, asc: !o || o.ascending !== false }; return b; },
       limit: function (n) { q.limit = n; return b; },
       single: function () { q.single = true; return b; },
