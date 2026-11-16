@@ -12,8 +12,18 @@ or Cash App / Venmo / PayPal / Zelle, and every order lands in the seller dashbo
 | `supabase/functions/` | Two small server functions for Stripe card payments |
 | `migration/` | Your current inventory exported from the claude.ai shop |
 
-Everything runs on free tiers: **Supabase** (database, logins, photo storage) and **Netlify or Vercel** (the web pages).
+Everything runs on free tiers: **Supabase** (database, logins, photo storage) and **GitHub Pages** (the web pages).
 Stripe charges its normal card fees (about 2.9% + 30¢ in the US).
+
+## This shop's live setup
+
+- **Database:** Supabase project `bundle-binder` (`emvggzohvtokuvwzizdr`). The schema, five bundles, the Mystery Mailer and
+  the first 8 cards are already loaded, and `web/config.js` already points at it. Both Stripe functions are deployed.
+- **Website:** every push to `main` publishes `web/` to GitHub Pages (`.github/workflows/pages.yml`).
+  In the repo, set **Settings → Pages → Source** to **GitHub Actions** once.
+- Still to do in the dashboard: steps 2 and 3 below, and step 6 if you want card payments (skip the `deploy` commands; just set the secrets).
+
+The full steps below are for setting up a brand-new copy.
 
 ---
 

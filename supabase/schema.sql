@@ -414,14 +414,17 @@ drop policy if exists items_read     on order_items; create policy items_read   
 drop policy if exists holds_admin    on holds;     create policy holds_admin    on holds     for select using (is_admin());
 -- (no insert/update policies on orders, order_items or holds: they only change through the functions above)
 
-revoke all on function mark_order_paid(uuid, text, boolean) from public;
-revoke all on function cancel_order(uuid) from public;
-revoke all on function mark_order_shipped(uuid) from public;
+-- Signed-out visitors can only browse (shop_cards). Carts and orders need a login; buyers get a guest login automatically.
+revoke all on function mark_order_paid(uuid, text, boolean), cancel_order(uuid), mark_order_shipped(uuid),
+  my_cart(), hold_card(uuid), release_card(uuid, boolean), release_cart(),
+  place_order(text, jsonb, text, text, text, text, text, text), cancel_my_order(uuid), expire_orders() from public, anon;
+revoke all on function new_order_code() from public, anon, authenticated;
 grant execute on function mark_order_paid(uuid, text, boolean) to authenticated, service_role;
 grant execute on function cancel_order(uuid) to authenticated, service_role;
 grant execute on function mark_order_shipped(uuid) to authenticated;
-grant execute on function shop_cards(), my_cart(), hold_card(uuid), release_card(uuid, boolean), release_cart(),
-  place_order(text, jsonb, text, text, text, text, text, text), cancel_my_order(uuid), is_admin(), expire_orders() to anon, authenticated;
+grant execute on function shop_cards(), is_admin() to anon, authenticated;
+grant execute on function my_cart(), hold_card(uuid), release_card(uuid, boolean), release_cart(),
+  place_order(text, jsonb, text, text, text, text, text, text), cancel_my_order(uuid), expire_orders() to authenticated;
 
 -- ───────────────────────────── photo storage ─────────────────────────────
 -- A public bucket for card photos; only the seller can upload or delete.
