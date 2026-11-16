@@ -105,7 +105,9 @@
     var forSale = A.cards.filter(function (c) { return c.status === "available"; }).length;
     el.innerHTML = '<section class="panel" style="display:flex;flex-direction:column;gap:12px"><h2>Add cards</h2>'
       + '<div class="cols"><label class="field">Default price<input id="d-price" value="1.00" inputmode="decimal"></label><label class="field">Default game<input id="d-game" placeholder="e.g. Lorcana"></label><label class="field">Default condition<select id="d-cond">' + condOpts("NM") + '</select></label><label class="field">Box / location<input id="d-box" placeholder="e.g. 50 MLB #3"></label></div>'
-      + '<div class="drop" id="drop" tabindex="0" role="button"><b>Drop card photos here</b><br><span class="note">or click to choose. Each photo becomes a listing named after its file; edit names below.</span></div><input type="file" id="files" accept="image/*" multiple hidden>'
+      + '<div class="drops"><div class="drop" id="drop" tabindex="0" role="button"><b>One card per photo</b><br><span class="note">Drop photos here or click to choose. Each photo becomes a listing named after its file.</span></div>'
+      + '<div class="drop" id="dropmany" tabindex="0" role="button"><b>One photo of many cards</b><br><span class="note">A binder page, a table spread or a scan. Each card gets found, straightened and listed on its own.</span></div></div>'
+      + '<input type="file" id="files" accept="image/*" multiple hidden><input type="file" id="manyfile" accept="image/*" hidden><div id="split-area"></div>'
       + '<details><summary class="note" style="cursor:pointer">Import from a spreadsheet (CSV)</summary><p class="note">Columns: name (required), set, number, game, condition, price, qty, box, photo (a web address). Paste from Excel or Google Sheets, or choose a file.</p><textarea id="csv" rows="5" style="width:100%"></textarea><div class="toolbar"><button class="btn sm" data-act="csv">Import rows</button><input type="file" id="csvfile" accept=".csv,.tsv,.txt"></div></details>'
       + '<button class="btn sm" data-act="addblank" style="align-self:flex-start">Add a card without a photo</button><p class="note" id="upmsg" role="status">' + esc(A.up) + '</p></section>'
       + '<section class="panel"><div class="row2"><h2>Inventory <span class="note" style="display:inline">(' + A.cards.length + ' listings, ' + forSale + ' for sale)</span></h2><input id="iq" type="search" placeholder="Filter" value="' + esc(A.q) + '" style="padding:8px 10px;border:1px solid var(--line);border-radius:8px;background:var(--surface)"></div><div id="ibulk" class="ibulk"></div><div class="ilist" id="ilist"></div></section>'
@@ -207,6 +209,11 @@
     A.up = "Added " + done + " card" + (done === 1 ? "" : "s") + (failed ? ", " + failed + " failed" : "") + ". Fill in names and prices below.";
     await loadCards(); renderInventory();
   }
+  // one photo of many cards → the splitter finds each card, the seller checks the boxes, each crop becomes a listing
+  function openMany(file) {
+    var area = document.getElementById("split-area"); if (!area || !window.BBSplit) return;
+    window.BBSplit.open(file, area, function (files) { return addPhotos(files); }).catch(function (e) { toast(e.message || "That photo couldn’t be opened."); });
+  }
   function parseCSV(text) {
     text = String(text || "").replace(/^﻿/, "");
     var first = text.split(/\r?\n/)[0] || "", delim = first.split("\t").length > first.split(",").length ? "\t" : ",";
@@ -239,7 +246,7 @@
 
   /* ---------- events ---------- */
   app.addEventListener("click", async function (e) {
-    var t = e.target.closest("[data-act]"); if (!t) { if (e.target.closest("#drop")) document.getElementById("files").click(); return; }
+    var t = e.target.closest("[data-act]"); if (!t) { if (e.target.closest("#split-area")) return; if (e.target.closest("#drop")) document.getElementById("files").click(); else if (e.target.closest("#dropmany")) { var mf = document.getElementById("manyfile"); mf.value = ""; mf.click(); } return; }
     var a = t.getAttribute("data-act"), id = t.getAttribute("data-id");
     if (a === "tab") { A.tab = t.getAttribute("data-tab"); if (A.tab === "orders") await loadOrders(); render(); }
     else if (a === "signout") { await sb.auth.signOut(); location.reload(); }
@@ -317,12 +324,19 @@
     if (t.classList && t.classList.contains("rowsel")) { var row = t.closest(".irow"), rid2 = row.getAttribute("data-id"); if (t.checked) A.sel[rid2] = true; else delete A.sel[rid2]; row.classList.toggle("sel", t.checked); renderBulk(); return; }
     if ((t.id === "bk-status" || t.id === "bk-condition") && t.value) { var key = t.id.slice(3), pv = {}; pv[key] = t.value; var lab = t.options[t.selectedIndex].text; bulkUpdate(pv, (key === "status" ? "Status" : "Condition") + " set to " + lab); return; }
     if (t.id === "files") { addPhotos(t.files); }
+    if (t.id === "manyfile" && t.files[0]) openMany(t.files[0]);
     if (t.id === "csvfile" && t.files[0]) { var fr = new FileReader(); fr.onload = function () { importCSV(String(fr.result)); }; fr.readAsText(t.files[0]); }
     if (t.id === "onefile" && t.files[0]) { try { var path = await uploadPhoto(t.files[0]); await saveCard(t.dataset.id, { image_path: path }); await loadCards(); renderRows(); } catch (er) { toast("Photo upload failed: " + (er.message || er)); } }
   });
-  app.addEventListener("dragover", function (e) { var d = e.target.closest && e.target.closest("#drop"); if (d) { e.preventDefault(); d.classList.add("over"); } });
-  app.addEventListener("dragleave", function (e) { var d = e.target.closest && e.target.closest("#drop"); if (d) d.classList.remove("over"); });
-  app.addEventListener("drop", function (e) { var d = e.target.closest && e.target.closest("#drop"); if (d) { e.preventDefault(); d.classList.remove("over"); addPhotos(e.dataTransfer.files); } });
+  app.addEventListener("dragover", function (e) { var d = e.target.closest && e.target.closest("#drop, #dropmany"); if (d) { e.preventDefault(); d.classList.add("over"); } });
+  app.addEventListener("dragleave", function (e) { var d = e.target.closest && e.target.closest("#drop, #dropmany"); if (d) d.classList.remove("over"); });
+  app.addEventListener("drop", function (e) {
+    var d = e.target.closest && e.target.closest("#drop, #dropmany"); if (!d) return;
+    e.preventDefault(); d.classList.remove("over");
+    if (d.id === "dropmany") { var f = Array.prototype.find.call(e.dataTransfer.files, function (x) { return /^image\//.test(x.type); }); if (f) openMany(f); else toast("Drop a photo (JPG, PNG or WebP)."); }
+    else addPhotos(e.dataTransfer.files);
+  });
+  app.addEventListener("keydown", function (e) { if ((e.key === "Enter" || e.key === " ") && e.target.id && (e.target.id === "drop" || e.target.id === "dropmany")) { e.preventDefault(); e.target.click(); } });
 
   boot();
 })();

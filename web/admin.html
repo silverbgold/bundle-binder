@@ -31,6 +31,22 @@
 .ifields .field input,.ifields .field select{padding:6px 8px;font-size:13.5px}
 .drop{border:2px dashed var(--line);border-radius:12px;padding:24px;text-align:center;cursor:pointer}
 .drop.over{border-color:var(--accent);background:var(--accent-soft)}
+.drops{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+@media (max-width:640px){.drops{grid-template-columns:1fr}}
+.drop:hover{border-color:var(--muted)}
+.splitbox{border:1.5px solid var(--accent);border-radius:12px;padding:14px;display:flex;flex-direction:column;gap:10px;background:var(--surface)}
+.splittools,.splitacts{display:flex;flex-wrap:wrap;gap:8px;align-items:center}
+.gridset{display:inline-flex;align-items:center;gap:6px;font-size:13.5px}
+.gridset input{width:52px;padding:5px 6px;border:1px solid var(--line);border-radius:6px;background:var(--surface);color:var(--ink)}
+.splitstage{position:relative;width:100%;margin:0 auto;touch-action:none;user-select:none;-webkit-user-select:none;border-radius:8px;overflow:hidden;cursor:crosshair;background:var(--sunken)}
+.splitstage img{display:block;width:100%;height:auto;max-width:100%;pointer-events:none}
+.sbox{position:absolute;border:2.5px solid #3BE0A0;background:rgb(59 224 160 / .14);box-shadow:0 0 0 1px rgb(0 0 0 / .45);border-radius:4px;cursor:move;transform-origin:50% 50%}
+.sbox-n{position:absolute;left:-2px;top:-2px;background:#3BE0A0;color:#0B1A14;font:700 12px/1 var(--f-mono);padding:3px 6px;border-radius:3px 0 4px 0}
+.sbox-x{position:absolute;right:-2px;top:-2px;width:24px;height:24px;border:0;border-radius:0 3px 0 4px;background:#0B1A14;color:#fff;font-size:15px;line-height:1;cursor:pointer}
+.sbox-t{position:absolute;right:22px;top:-2px;width:24px;height:24px;border:0;border-radius:0 0 4px 4px;background:#0B1A14;color:#3BE0A0;font-size:14px;line-height:1;cursor:pointer}
+.sbox-h{position:absolute;right:-7px;bottom:-7px;width:16px;height:16px;border-radius:50%;background:#3BE0A0;border:2px solid #0B1A14;cursor:nwse-resize}
+.sbox-r{position:absolute;left:50%;top:-20px;width:14px;height:14px;margin-left:-7px;border-radius:50%;background:#fff;border:2px solid #0B1A14;cursor:grab}
+.sbox-r::after{content:"";position:absolute;left:50%;top:12px;width:2px;height:8px;margin-left:-1px;background:#0B1A14}
 .brow{display:grid;grid-template-columns:1.6fr 1fr 1fr 1fr 1fr .8fr auto;gap:8px;align-items:end;padding:10px;border:1px solid var(--line);border-radius:10px}
 .holdlist{list-style:none;margin:0;padding:0;font-size:13.5px;display:flex;flex-direction:column;gap:4px}
 .holdlist li{display:flex;justify-content:space-between;gap:10px;border-bottom:1px dashed var(--line);padding:3px 0}
@@ -42,6 +58,7 @@
 <div id="app"><div class="wrap"><p class="note" style="padding:40px 0">Loading…</p></div></div>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.4/dist/umd/supabase.js"></script>
 <script src="config.js"></script>
+<script src="split.js"></script>
 <script src="admin.js"></script>
 </body>
 </html>

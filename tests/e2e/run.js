@@ -217,6 +217,33 @@ const q1 = async (sql) => (await pool.query(sql)).rows[0];
   await S.click('[data-act="bulkdel"]'); await S.click('[data-act="bulkdel"]'); await S.waitForTimeout(1000);
   ok((await q1("select count(*)::int n from cards")).n === 3 && (await q1("select count(*)::int n from cards where name = 'New card'")).n === 0, "bulk delete (after confirm) removes only the selected card");
   await S.fill("#iq", "");
+
+  // one photo of many cards → separate listings
+  const groupPng = path.join(__dirname, "shot-group-input.png");
+  const dataUrl = await S.evaluate(() => {
+    const cv = document.createElement("canvas"); cv.width = 1600; cv.height = 1000; const x = cv.getContext("2d");
+    x.fillStyle = "#3a2a1c"; x.fillRect(0, 0, 1600, 1000);
+    const card = (cx, cy, w, h, deg, hue) => {
+      x.save(); x.translate(cx, cy); x.rotate(deg * Math.PI / 180);
+      x.fillStyle = "#f4f1e8"; x.fillRect(-w / 2, -h / 2, w, h);
+      x.fillStyle = `hsl(${hue} 60% 45%)`; x.fillRect(-w / 2 + 14, -h / 2 + 40, w - 28, h * 0.5);
+      x.fillStyle = "#222"; for (let i = 0; i < 4; i++) x.fillRect(-w / 2 + 18, h * 0.12 + i * 22, w * 0.6, 8);
+      x.restore();
+    };
+    card(230, 330, 250, 350, 0, 10); card(600, 330, 250, 350, 12, 140); card(980, 330, 250, 350, 0, 220); card(1300, 760, 350, 250, 0, 300);
+    return cv.toDataURL("image/png");
+  });
+  fs.writeFileSync(groupPng, Buffer.from(dataUrl.split(",")[1], "base64"));
+  await S.setInputFiles("#manyfile", groupPng);
+  await S.waitForSelector("#split-stage .sbox");
+  const found = await S.locator("#split-stage .sbox").count();
+  ok(found === 4 && (await S.textContent(".splitbox")).includes("1 tilted"), "one photo of 4 cards: the splitter finds 4 cards (1 tilted)" + (found === 4 ? "" : " (found " + found + ")"));
+  await S.screenshot({ path: path.join(__dirname, "shot-split.png") });
+  await S.click('[data-split="go"]');
+  await S.waitForFunction(() => /Added 4 cards/.test((document.getElementById("upmsg") || {}).textContent || ""), null, { timeout: 15000 });
+  const made = await q1("select count(*)::int n, count(*) filter (where image_path like 'cards/%')::int img from cards where name like 'shot group input%'");
+  ok(made.n === 4 && made.img === 4, "each card in the photo becomes its own listing with its own photo");
+  await pool.query("delete from cards where name like 'shot group input%'");
   await S.click('[data-act="tab"][data-tab="settings"]'); await S.waitForSelector('[data-s="hold_minutes"]');
   await S.fill('[data-s="hold_minutes"]', "20"); await S.waitForTimeout(900);
   ok((await q1("select hold_minutes from settings")).hold_minutes === 20, "seller can change the hold time");
