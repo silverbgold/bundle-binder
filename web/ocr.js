@@ -30,62 +30,143 @@
     finally { setTimeout(function () { URL.revokeObjectURL(url); }, 0); }
     return im;
   }
-  // upright, grey, 1000px tall canvas; turn = 0, 90 or -90 degrees
-  function prepare(im, turn) {
-    var w = im.naturalWidth, h = im.naturalHeight, side = turn ? [h, w] : [w, h], sc = 1000 / side[1];
-    var cv = document.createElement("canvas"); cv.width = Math.round(side[0] * sc); cv.height = 1000;
+  // the card turned by `turn` degrees (0, 90, -90), scaled so it is `tall` pixels high, optionally cropped to a band
+  function upright(im, turn, tall, band) {
+    var w = im.naturalWidth, h = im.naturalHeight, ow = turn ? h : w, oh = turn ? w : h;
+    var y0 = band ? band[0] * oh : 0, y1 = band ? band[1] * oh : oh, sc = tall / (y1 - y0);
+    var cv = document.createElement("canvas"); cv.width = Math.round(ow * sc); cv.height = Math.round((y1 - y0) * sc);
     var cx = cv.getContext("2d"); cx.fillStyle = "#fff"; cx.fillRect(0, 0, cv.width, cv.height);
-    cx.translate(cv.width / 2, cv.height / 2); cx.rotate(turn * Math.PI / 180); cx.scale(sc, sc); cx.drawImage(im, -w / 2, -h / 2);
-    var d = cx.getImageData(0, 0, cv.width, cv.height), p = d.data;
-    for (var i = 0; i < p.length; i += 4) { var g = 0.3 * p[i] + 0.59 * p[i + 1] + 0.11 * p[i + 2]; p[i] = p[i + 1] = p[i + 2] = g; }
-    cx.setTransform(1, 0, 0, 1, 0, 0); cx.putImageData(d, 0, 0);
+    cx.setTransform(sc, 0, 0, sc, 0, -y0 * sc); cx.translate(ow / 2, oh / 2); cx.rotate(turn * Math.PI / 180); cx.drawImage(im, -w / 2, -h / 2);
+    return cv;
+  }
+  // mode "gray": dark text as is.  mode "white": keep only bright, colourless pixels (white lettering on coloured banners)
+  function filter(cv, mode, level) {
+    var cx = cv.getContext("2d"), d = cx.getImageData(0, 0, cv.width, cv.height), p = d.data;
+    for (var i = 0; i < p.length; i += 4) {
+      var mx = Math.max(p[i], p[i + 1], p[i + 2]), mn = Math.min(p[i], p[i + 1], p[i + 2]), g;
+      if (mode === "white") g = (mn > level && mx - mn < 70) ? 0 : 255;
+      else g = 0.3 * p[i] + 0.59 * p[i + 1] + 0.11 * p[i + 2];
+      p[i] = p[i + 1] = p[i + 2] = g;
+    }
+    cx.putImageData(d, 0, 0);
     return cv;
   }
 
-  function cleanName(t) {
-    t = String(t || "").replace(/[|_~^*<>{}\[\]\\=+"“”«»]/g, " ").replace(/\s+/g, " ").trim();
-    t = t.replace(/^[^A-Za-z0-9]+|[^A-Za-z0-9!?.)]+$/g, "").trim();
-    // drop things printed on the same line as the name: "HP 60", "60 HP", a mana or ink cost
-    t = t.replace(/\s+(HP\s*\d{1,3}|\d{1,3}\s*HP)$/i, "").replace(/\s+\d{1,2}$/, "").replace(/^\d{1,2}\s+(?=[A-Za-z])/, "").trim();
-    return t;
+  var SMALL = { of: 1, the: 1, and: 1, a: 1, an: 1, to: 1, in: 1, on: 1, at: 1, for: 1, de: 1 };
+  var TYPE_WORDS = /^(action|location|item|character|song|trainer|energy|supporter|stadium|creature|instant|sorcery|artifact|enchantment|land|planeswalker|basic|stage|hp|lv|rookie|rc|auto|autograph|base|insert)$/i;
+  function titleCase(words) {
+    return words.map(function (wd, i) {
+      if (wd !== wd.toUpperCase()) return wd;                       // already mixed case: keep
+      var lw = wd.toLowerCase();
+      if (i > 0 && SMALL[lw]) return lw;
+      return lw.replace(/(^|[-'’.])([a-z])/g, function (m0, a, b) { return a + b.toUpperCase(); });
+    }).join(" ");
   }
-  function letters(t) { return (t.match(/[A-Za-z]/g) || []).length; }
-  function pickName(lines, H) {
-    var best = null;
-    lines.forEach(function (l) {
-      var t = cleanName(l.text), n = letters(t);
-      if (n < 3 || t.length > 60 || n / Math.max(1, t.replace(/\s/g, "").length) < 0.6) return;
-      if (l.bbox.y0 > 0.35 * H || l.confidence < 55) return;
-      if (/^(hp|lv|stage|basic|trainer|energy|item|supporter|creature|instant|sorcery|artifact|enchantment|legendary)\b/i.test(t) && t.split(" ").length <= 2) return;
-      // prefer the top-most confident line; among close ones, the taller (bigger print) one
-      var height = l.bbox.y1 - l.bbox.y0, score = l.confidence + height * 0.8 - l.bbox.y0 / H * 60;
-      if (!best || score > best.score) best = { text: t, score: score, conf: l.confidence };
+  // the longest run of real words in a line ("GRAMMA TALA © 3" → ["GRAMMA", "TALA"])
+  function wordRun(text) {
+    var toks = String(text || "").replace(/[|\\_~^*<>{}\[\]=+"“”«»©®°]/g, " ").split(/\s+/), best = [], cur = [];
+    toks.forEach(function (t) {
+      var core = t.replace(/^[^A-Za-z]+|[^A-Za-z!?.'’]+$/g, "");
+      var ok = /^[A-Za-z][A-Za-z'’.-]*[A-Za-z!?.]?$/.test(core) && (core.replace(/[^A-Za-z]/g, "").length >= 2 || /^[AI]$/.test(core) || core === "-");
+      if (ok) cur.push(core); else { if (cur.length > best.length) best = cur; cur = []; }
     });
+    if (cur.length > best.length) best = cur;
+    if (best.length >= 3 && best[0].length === 1) best.shift();          // a stray letter from the banner's edge
+    while (best.length && (best[0] === "-" || SMALL[best[0].toLowerCase()] && best.length > 1 && best[0] === best[0].toLowerCase())) best.shift();
+    while (best.length && best[best.length - 1] === "-") best.pop();
     return best;
   }
+  // what's behind white lettering: a coloured banner (names) or a black label box (ability names)
+  function onBlackBox(col, bb) {
+    var cx = col.getContext("2d"), x0 = Math.max(0, bb.x0 | 0), y0 = Math.max(0, bb.y0 | 0), ww = Math.min(col.width, bb.x1 | 0) - x0, hh = Math.min(col.height, bb.y1 | 0) - y0;
+    if (ww < 4 || hh < 4) return false;
+    var p = cx.getImageData(x0, y0, ww, hh).data, n = 0, lum = 0, sat = 0;
+    for (var i = 0; i < p.length; i += 16) {
+      var mx = Math.max(p[i], p[i + 1], p[i + 2]), mn = Math.min(p[i], p[i + 1], p[i + 2]);
+      if (mn > 150) continue;                                         // the letters themselves
+      n++; lum += 0.3 * p[i] + 0.59 * p[i + 1] + 0.11 * p[i + 2]; sat += mx - mn;
+    }
+    return n > 10 && lum / n < 145 && sat / n < 45;            // grey, colourless box (names sit on coloured banners)
+  }
+  function nameCandidates(lines, H, src, col) {
+    var out = [];
+    lines.forEach(function (l) {
+      if (l.confidence < 60) return;
+      if (src === "white" && col && onBlackBox(col, l.bbox)) return;
+      var run = wordRun(l.text);
+      while (run.length > 1 && TYPE_WORDS.test(run[run.length - 1])) run.pop();   // "Pikachu HP" → "Pikachu"
+      while (run.length > 1 && TYPE_WORDS.test(run[0])) run.shift();
+      var letters = run.join("").replace(/[^A-Za-z]/g, "").length;
+      if (letters < 4 || run.length > 7) return;
+      if (run.length === 1 && TYPE_WORDS.test(run[0])) return;
+      if (run.every(function (wd) { return TYPE_WORDS.test(wd) || SMALL[wd.toLowerCase()]; })) return;
+      var height = (l.bbox.y1 - l.bbox.y0) / H;
+      // names are the biggest print on a card; rules text is small, and long sentences aren't names
+      var lower = run.filter(function (wd) { return /^[a-z]/.test(wd); }).length;
+      if (lower > 1 && run.length > 3) return;
+      out.push({ words: run, score: height * 1000 * (l.confidence / 100) + (run.length >= 2 ? 4 : 0), conf: l.confidence, src: src, y: l.bbox.y0 / H, y1: l.bbox.y1 / H, h: height });
+    });
+    return out;
+  }
+  // "142/204" → "142". Tiny print often loses digits ("2/204"), so a number that looks cut short is left blank.
   function pickNumber(text) {
-    var m = String(text).match(/\b(\d{1,4})\s*\/\s*(\d{1,4})\b/);
-    if (m && +m[1] <= +m[2] * 2 + 50) return m[1];
-    m = String(text).match(/(?:#|No\.?\s)\s?(\d{1,4})\b/i);
+    var all = String(text).match(/\b\d{1,4}\s*\/\s*\d{2,4}\b/g) || [], best = "";
+    all.forEach(function (m0) {
+      var pr = m0.split("/"), a = pr[0].trim(), b = pr[1].trim();
+      if (+a > +b * 2 + 50 || a.length < b.length) return;          // "19/204" is a misread of 1?9/204: skip it
+      if (a.length > best.length) best = a;
+    });
+    if (best) return String(+best);
+    var m = String(text).match(/(?:#|\bNo\.)\s?(\d{2,4})\b/i);
     return m ? m[1] : "";
   }
-
-  async function readOnce(worker, cv) {
-    var r = await worker.recognize(cv), d = r.data || {}, lines = d.lines || [];
-    var mean = lines.length ? lines.reduce(function (t, l) { return t + l.confidence; }, 0) / lines.length : 0;
-    return { lines: lines, text: d.text || "", mean: mean, H: cv.height };
+  function goodWords(lines) {
+    var n = 0;
+    lines.forEach(function (l) { (l.words || []).forEach(function (wd) { if (wd.confidence > 80 && /^[A-Za-z]{3,}[.,]?$/.test(wd.text)) n++; }); });
+    return n;
   }
 
   async function read(blob) {
     var worker = await getWorker(), im = await loadImage(blob);
-    var turns = im.naturalWidth > im.naturalHeight * 1.1 ? [90, -90] : [0];
-    var best = null;
+    // 1. which way up? the turn that gives the most clearly readable words (rules text) wins
+    var turns = [0, 90, -90], bestTurn = 0, bestN = -1;
     for (var i = 0; i < turns.length; i++) {
-      var res = await readOnce(worker, prepare(im, turns[i]));
-      if (!best || res.mean > best.mean) best = res;
+      var q = await worker.recognize(filter(upright(im, turns[i], 800), "gray"));
+      var n = goodWords((q.data && q.data.lines) || []);
+      if (n > bestN) { bestN = n; bestTurn = turns[i]; }
+      if (i === 0 && n >= 12) break;                                  // clearly upright already
     }
-    var nm = pickName(best.lines, best.H);
-    return { name: nm ? nm.text : "", number: pickNumber(best.text), confidence: nm ? Math.round(nm.conf) : 0 };
+    // 2. read dark text and white lettering, collect name candidates
+    var cands = [], allText = "", col = upright(im, bestTurn, 1400);
+    var passes = [["gray"], ["white", 150], ["white", 185]];
+    for (var j = 0; j < passes.length; j++) {
+      var cv = filter(upright(im, bestTurn, 1400), passes[j][0], passes[j][1]);
+      var r = await worker.recognize(cv), d = r.data || {};
+      allText += "\n" + (d.text || "");
+      cands = cands.concat(nameCandidates(d.lines || [], cv.height, passes[j][0], col));
+    }
+    cands.sort(function (a, b) { return b.score - a.score; });
+    // name-sized print only: ability labels and rules text are smaller, and a blank name beats a wrong one
+    var best = cands[0] && cands[0].score >= 30 ? cands[0] : null, name = "";
+    if (best) {
+      name = titleCase(best.words);
+      // a subtitle printed just under the name (e.g. "Keeper of Ancient Stories")
+      var sub = cands.filter(function (c) {
+        return c !== best && c.src === best.src && c.y >= best.y1 - 0.005 && c.y <= best.y1 + best.h * 0.9 && c.h < best.h * 0.8 && c.h > best.h * 0.3 && c.conf >= 60 && c.words.length >= 2;
+      })[0];
+      if (sub) {
+        var sw = sub.words.slice(); while (sw.length > 2 && sw[sw.length - 1].replace(/[^A-Za-z]/g, "").length <= 2) sw.pop();
+        name += " - " + titleCase(sw);
+      }
+    }
+    // 3. the card number is tiny print along the bottom: read that strip zoomed in (two framings)
+    var number = pickNumber(allText);
+    var bands = [[260, [0.86, 1]], [360, [0.8, 1]]];
+    for (var b = 0; b < bands.length && !number; b++) {
+      var strip = await worker.recognize(filter(upright(im, bestTurn, bands[b][0], bands[b][1]), "gray"));
+      number = pickNumber((strip.data && strip.data.text) || "");
+    }
+    return { name: name.slice(0, 80), number: number, confidence: best ? Math.round(best.conf) : 0, turn: bestTurn };
   }
 
   window.BBOcr = {

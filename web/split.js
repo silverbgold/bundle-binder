@@ -562,6 +562,7 @@ window.BBSplit = {
   // opts: { mode: "adjust", title, startBox } edits one card's photo; addFn({ blob, box }) gets the new crop.
   open: function (file, container, addFn, opts) { if (!container.__bbBound) { bind(container); container.__bbBound = true; } return open(file, container, addFn, opts); },
   isOpen: function () { return !!sp; },
-  detectBoxes: detectBoxes
+  detectBoxes: detectBoxes,
+  cropBox: cropBox
 };
 })();
