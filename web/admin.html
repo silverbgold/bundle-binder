@@ -36,6 +36,9 @@
 .thumbcol .tiny:hover{border-color:var(--accent);color:var(--accent)}
 .thumbcol .tiny:disabled{opacity:.6;cursor:default}
 .thumbcol .tiny[aria-disabled="true"]{opacity:.45}
+.autoread{display:flex;align-items:flex-start;gap:8px;font-size:14px;font-weight:600;cursor:pointer}
+.autoread input{width:16px;height:16px;margin-top:2px;accent-color:var(--accent)}
+.irow.justread{box-shadow:0 0 0 2px var(--ok);transition:box-shadow .3s}
 .drops{display:grid;grid-template-columns:1fr 1fr;gap:12px}
 @media (max-width:640px){.drops{grid-template-columns:1fr}}
 .drop:hover{border-color:var(--muted)}
@@ -64,6 +67,7 @@
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.4/dist/umd/supabase.js"></script>
 <script src="config.js"></script>
 <script src="split.js"></script>
+<script src="ocr.js"></script>
 <script src="admin.js"></script>
 </body>
 </html>

@@ -128,7 +128,7 @@ async function newBuyer(browser, base, mock) {
     const body = photos.get(p);
     return body ? r.fulfill({ status: 200, contentType: "image/jpeg", body, headers: { "Access-Control-Allow-Origin": "*" } }) : r.fulfill({ status: 404, body: "" });
   });
-  await ctx.route("https://cdn.jsdelivr.net/**", (r) => r.fulfill({ contentType: "text/javascript", body: mock }));
+  await ctx.route("https://cdn.jsdelivr.net/npm/@supabase/**", (r) => r.fulfill({ contentType: "text/javascript", body: mock }));
   await ctx.route("https://fonts.googleapis.com/**", (r) => r.fulfill({ contentType: "text/css", body: "" }));
   const page = await ctx.newPage();
   page.on("pageerror", (e) => { failures++; console.log("FAIL page error: " + e.message); });
@@ -225,7 +225,8 @@ const q1 = async (sql) => (await pool.query(sql)).rows[0];
   ok((await q1("select count(*)::int n from cards")).n === 3 && (await q1("select count(*)::int n from cards where name = 'New card'")).n === 0, "bulk delete (after confirm) removes only the selected card");
   await S.fill("#iq", "");
 
-  // one photo of many cards → separate listings
+  // one photo of many cards → separate listings (name reading off here; the drawn cards have no names)
+  await S.uncheck("#autoread");
   const groupPng = path.join(__dirname, "shot-group-input.png");
   const dataUrl = await S.evaluate(() => {
     const cv = document.createElement("canvas"); cv.width = 1600; cv.height = 1000; const x = cv.getContext("2d");
@@ -295,6 +296,50 @@ const q1 = async (sql) => (await pool.query(sql)).rows[0];
   // cards without a photo still show the buttons, with a hint
   await S.click('.irow:has(input[value="Lightning Bolt"]) [data-act="rotate"]', { force: true });
   ok(/Add a photo first/.test(await S.textContent(".toast")), "Rotate on a card with no photo says to add a photo first");
+
+  // free name reading (OCR in the browser) on upload
+  await S.check("#autoread");
+  const cardPng = path.join(__dirname, "shot-ocr-input.png");
+  const cardUrl = await S.evaluate(() => {
+    const cv = document.createElement("canvas"); cv.width = 630; cv.height = 880; const x = cv.getContext("2d");
+    x.fillStyle = "#e8c33a"; x.fillRect(0, 0, 630, 880); x.fillStyle = "#fbf7ea"; x.fillRect(22, 22, 586, 836);
+    x.fillStyle = "#111"; x.font = "bold 40px Georgia, serif"; x.fillText("Lightning Dragon", 44, 78);
+    x.font = "bold 30px Arial"; x.fillText("HP 120", 460, 78);
+    x.fillStyle = "#4a7fb0"; x.fillRect(44, 110, 542, 380);
+    x.fillStyle = "#333"; x.font = "22px Arial"; x.fillText("Deal 30 damage to each opposing", 50, 560);
+    x.font = "18px Arial"; x.fillText("123/200", 50, 830);
+    return cv.toDataURL("image/png");
+  });
+  fs.writeFileSync(cardPng, Buffer.from(cardUrl.split(",")[1], "base64"));
+  await S.setInputFiles("#files", cardPng);
+  await S.waitForFunction(() => /Read \d+ name/.test((document.getElementById("upmsg") || {}).textContent || ""), null, { timeout: 120000 });
+  const ocrCard = await q1("select id, name, number from cards order by created_at desc limit 1");
+  ok(ocrCard.name === "Lightning Dragon" && ocrCard.number === "123", "a new photo gets its name and number read automatically" + (ocrCard.name === "Lightning Dragon" ? "" : " (got " + ocrCard.name + " / " + ocrCard.number + ")"));
+
+  // Read names on selected cards
+  await pool.query(`update cards set name = 'unnamed', number = '' where id = '${ocrCard.id}'`);
+  await S.reload(); await S.waitForSelector('[data-act="tab"][data-tab="inventory"]'); await S.click('[data-act="tab"][data-tab="inventory"]'); await S.waitForSelector(".irow");
+  await S.check('.irow:has(input[value="unnamed"]) .rowsel');
+  await S.click('[data-act="bulkread"]');
+  await S.waitForFunction(() => /Read \d+ of \d+ names/.test((document.getElementById("toast") || {}).textContent || ""), null, { timeout: 120000 });
+  const reread = await q1(`select name, number from cards where id = '${ocrCard.id}'`);
+  ok(reread.name === "Lightning Dragon" && reread.number === "123", "Read names fills in selected cards from their photos");
+  ok((await S.inputValue('.irow[data-id="' + ocrCard.id + '"] [data-f="name"]')) === "Lightning Dragon", "the read name shows in the inventory row straight away");
+  await S.screenshot({ path: path.join(__dirname, "shot-names.png"), fullPage: true });
+  await S.click('[data-act="selnone"]');
+
+  // Export CSV: every card, importable back
+  const [dl] = await Promise.all([S.waitForEvent("download"), S.click('[data-act="export"]')]);
+  const csv = fs.readFileSync(await dl.path(), "utf8").replace(/^﻿/, "");
+  const csvLines = csv.trim().split(/\r?\n/), nCards = (await q1("select count(*)::int n from cards")).n;
+  ok(/^cards-all-\d{4}-\d\d-\d\d\.csv$/.test(dl.suggestedFilename()) && csvLines[0] === "name,set,number,game,condition,price,qty,box,status,photo" && csvLines.length === nCards + 1, "Export CSV downloads every card with a header row (" + nCards + " cards)");
+  ok(csv.includes("Lightning Dragon,,123,") && /Lightning Dragon[^\n]*,for sale,http[^\n]*card-photos\/cards\//.test(csv), "exported rows carry the details, status and a photo link");
+  await pool.query("delete from cards where name like 'shot group input%'");
+  await S.click("details summary"); await S.fill("#csv", csvLines[0] + "\n" + csvLines.find((l) => l.startsWith("Lightning Dragon")).replace(",for sale,", ",hidden,"));
+  await S.click('[data-act="csv"]'); await S.waitForFunction(() => /Imported 1 card/.test((document.getElementById("upmsg") || {}).textContent || ""), null, { timeout: 10000 });
+  const back = await q1("select status, image_path, number from cards where name = 'Lightning Dragon' order by created_at desc limit 1");
+  ok(back.status === "hidden" && back.number === "123" && /^cards\//.test(back.image_path), "an exported row imports back in (status and photo kept)");
+  await pool.query("delete from cards where name = 'Lightning Dragon'");
   await pool.query("delete from cards where name like 'shot group input%'");
   await S.click('[data-act="tab"][data-tab="settings"]'); await S.waitForSelector('[data-s="hold_minutes"]');
   await S.fill('[data-s="hold_minutes"]', "20"); await S.waitForTimeout(900);

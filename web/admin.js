@@ -107,10 +107,10 @@
       + '<div class="cols"><label class="field">Default price<input id="d-price" value="1.00" inputmode="decimal"></label><label class="field">Default game<input id="d-game" placeholder="e.g. Lorcana"></label><label class="field">Default condition<select id="d-cond">' + condOpts("NM") + '</select></label><label class="field">Box / location<input id="d-box" placeholder="e.g. 50 MLB #3"></label></div>'
       + '<div class="drops"><div class="drop" id="drop" tabindex="0" role="button"><b>One card per photo</b><br><span class="note">Drop photos here or click to choose. Each photo becomes a listing named after its file.</span></div>'
       + '<div class="drop" id="dropmany" tabindex="0" role="button"><b>One photo of many cards</b><br><span class="note">A binder page, a table spread or a scan. Each card gets found, straightened and listed on its own.</span></div></div>'
-      + '<input type="file" id="files" accept="image/*" multiple hidden><input type="file" id="manyfile" accept="image/*" hidden><div id="split-area"></div>'
-      + '<details><summary class="note" style="cursor:pointer">Import from a spreadsheet (CSV)</summary><p class="note">Columns: name (required), set, number, game, condition, price, qty, box, photo (a web address). Paste from Excel or Google Sheets, or choose a file.</p><textarea id="csv" rows="5" style="width:100%"></textarea><div class="toolbar"><button class="btn sm" data-act="csv">Import rows</button><input type="file" id="csvfile" accept=".csv,.tsv,.txt"></div></details>'
+      + '<label class="autoread"><input type="checkbox" id="autoread"' + (autoRead() ? ' checked' : '') + '> Read card names from new photos automatically <span class="note" style="display:inline">(free; runs on this computer, so it can take a few seconds per card)</span></label><input type="file" id="files" accept="image/*" multiple hidden><input type="file" id="manyfile" accept="image/*" hidden><div id="split-area"></div>'
+      + '<details><summary class="note" style="cursor:pointer">Import from a spreadsheet (CSV)</summary><p class="note">Columns: name (required), set, number, game, condition, price, qty, box, status, photo (a web address). A file from Export CSV imports straight back in. Paste from Excel or Google Sheets, or choose a file.</p><textarea id="csv" rows="5" style="width:100%"></textarea><div class="toolbar"><button class="btn sm" data-act="csv">Import rows</button><input type="file" id="csvfile" accept=".csv,.tsv,.txt"></div></details>'
       + '<button class="btn sm" data-act="addblank" style="align-self:flex-start">Add a card without a photo</button><p class="note" id="upmsg" role="status">' + esc(A.up) + '</p></section>'
-      + '<section class="panel"><div class="row2"><h2>Inventory <span class="note" style="display:inline">(' + A.cards.length + ' listings, ' + forSale + ' for sale)</span></h2><input id="iq" type="search" placeholder="Filter" value="' + esc(A.q) + '" style="padding:8px 10px;border:1px solid var(--line);border-radius:8px;background:var(--surface)"></div><div id="ibulk" class="ibulk"></div><div class="ilist" id="ilist"></div></section>'
+      + '<section class="panel"><div class="row2"><h2>Inventory <span class="note" style="display:inline">(' + A.cards.length + ' listings, ' + forSale + ' for sale)</span></h2><div class="toolbar" style="margin:0"><button class="btn sm" data-act="export"' + (A.cards.length ? '' : ' disabled') + ' title="Download every card as a spreadsheet (CSV)">Export CSV</button><input id="iq" type="search" placeholder="Filter" value="' + esc(A.q) + '" style="padding:8px 10px;border:1px solid var(--line);border-radius:8px;background:var(--surface)"></div></div><div id="ibulk" class="ibulk"></div><div class="ilist" id="ilist"></div></section>'
       + '<input type="file" id="onefile" accept="image/*" hidden>';
     renderRows();
   }
@@ -128,6 +128,8 @@
       + '<span class="bk"><input id="bk-game" placeholder="Game" aria-label="New game"><button class="btn sm" data-act="bulk" data-k="game">Set game</button></span>'
       + '<span class="bk"><input id="bk-box" placeholder="Box" aria-label="New box"><button class="btn sm" data-act="bulk" data-k="box">Set box</button></span>'
       + '<span class="bk"><input id="bk-qty" type="number" min="0" placeholder="Qty" aria-label="New quantity" style="width:70px"><button class="btn sm" data-act="bulk" data-k="qty">Set qty</button></span>'
+      + '<button class="btn sm" data-act="bulkread" title="Read each selected card’s name and number from its photo">Read names</button>'
+      + '<button class="btn sm" data-act="exportsel">Export selected</button>'
       + '<button class="btn sm" data-act="bulkrotate" title="Turn every selected photo a quarter turn clockwise">Rotate selected</button>'
       + '<button class="btn sm danger" data-act="bulkdel">Delete ' + n + '</button><button class="btn sm ghost" data-act="selnone">Clear</button></div>';
     el.innerHTML = h;
@@ -251,13 +253,84 @@
     var d = defaults(), done = 0, failed = 0, rows = [];
     for (var i = 0; i < files.length; i++) {
       A.up = "Uploading " + (i + 1) + " of " + files.length + "…"; var m = document.getElementById("upmsg"); if (m) m.textContent = A.up;
-      try { var path = await uploadPhoto(files[i]); rows.push(Object.assign({ name: files[i].name.replace(/\.[^.]+$/, "").replace(/[_-]+/g, " ").trim() || "New card", image_path: path, qty: 1 }, d, files[i].bbExtra || {})); done++; }
+      try { var path = await uploadPhoto(files[i]); files[i].__bbPath = path; rows.push(Object.assign({ name: files[i].name.replace(/\.[^.]+$/, "").replace(/[_-]+/g, " ").trim() || "New card", image_path: path, qty: 1 }, d, files[i].bbExtra || {})); done++; }
       catch (e) { failed++; }
     }
-    if (rows.length) { var r = await sb.from("cards").insert(rows); if (r.error) { toast("Couldn’t save the cards: " + r.error.message); failed += rows.length; done = 0; } }
-    A.up = "Added " + done + " card" + (done === 1 ? "" : "s") + (failed ? ", " + failed + " failed" : "") + ". Fill in names and prices below.";
+    var created = [];
+    if (rows.length) {
+      var r = await sb.from("cards").insert(rows).select("id,name,image_path");
+      if (r.error) { toast("Couldn’t save the cards: " + r.error.message); failed += rows.length; done = 0; } else created = r.data || [];
+    }
+    var reading = created.length && autoRead() && window.BBOcr;
+    A.up = "Added " + done + " card" + (done === 1 ? "" : "s") + (failed ? ", " + failed + " failed" : "") + "." + (reading ? " Reading names from the photos…" : " Fill in names and prices below.");
     await loadCards(); renderInventory();
+    if (reading) {
+      var byPath = {}; rows.forEach(function (row, k) { byPath[row.image_path] = files.filter(function (f) { return f.__bbPath === row.image_path; })[0]; });
+      readNames(created.map(function (c) { return { id: c.id, file: byPath[c.image_path], onlyIfName: c.name }; }));
+    }
   }
+  /* ---------- free name reading (OCR, in the browser) ---------- */
+  function autoRead() { try { return localStorage.getItem("bb-autoread") !== "0"; } catch (e) { return true; } }
+  var reader = { busy: false };
+  function readMsg(t) { A.up = t; var m = document.getElementById("upmsg"); if (m) m.textContent = t; }
+  // items: [{ id, file?, onlyIfName? }]. onlyIfName: only replace the name if it hasn't been edited since upload.
+  async function readNames(items) {
+    if (!window.BBOcr || !items.length) return { named: 0, total: 0 };
+    if (reader.busy) { toast("Still reading the last batch. Try again in a moment."); return { named: 0, total: 0 }; }
+    reader.busy = true;
+    var named = 0, numbered = 0, unsure = 0, failed = 0;
+    try {
+      readMsg(items.length > 1 ? "Getting the name reader ready (first time only, about 10 MB)…" : "Reading the name…");
+      await window.BBOcr.warmUp();
+      for (var i = 0; i < items.length; i++) {
+        var it = items[i], c = A.cards.find(function (x) { return x.id === it.id; });
+        if (!c || !c.image_path) continue;
+        readMsg("Reading names " + (i + 1) + " of " + items.length + "…");
+        try {
+          var res = await window.BBOcr.read(it.file || await fetchPhoto(c.image_path)), patch = {};
+          if (res.name && (!it.onlyIfName || c.name === it.onlyIfName)) patch.name = res.name.slice(0, 140);
+          if (res.number && !c.number) patch.number = res.number;
+          if (patch.name) named++; else unsure++;
+          if (patch.number) numbered++;
+          if (patch.name || patch.number) {
+            var r = await sb.from("cards").update(patch).eq("id", c.id); if (r.error) throw r.error;
+            Object.assign(c, patch);
+            var row = document.querySelector('.irow[data-id="' + c.id + '"]');
+            if (row && !row.contains(document.activeElement)) {
+              if (patch.name) { var ni = row.querySelector('[data-f="name"]'); if (ni) ni.value = patch.name; }
+              if (patch.number) { var nu = row.querySelector('[data-f="number"]'); if (nu) nu.value = patch.number; }
+              row.classList.add("justread"); setTimeout(function (el) { el.classList.remove("justread"); }.bind(null, row), 1600);
+            }
+          }
+        } catch (e) { failed++; if (i === 0 && /download/i.test(e.message || "")) { readMsg(e.message); break; } }
+      }
+      readMsg("Read " + named + " name" + (named === 1 ? "" : "s") + (numbered ? " and " + numbered + " card number" + (numbered === 1 ? "" : "s") : "") + " from " + items.length + " photo" + (items.length === 1 ? "" : "s") + "."
+        + (unsure ? " " + unsure + " couldn’t be read clearly; please fill those in." : "") + (failed ? " " + failed + " failed." : "") + " Check the names and prices below.");
+    } catch (e) { readMsg("Couldn’t start the name reader: " + (e.message || e)); }
+    reader.busy = false;
+    return { named: named, total: items.length };
+  }
+
+  /* ---------- export ---------- */
+  function csvCell(v) {
+    v = v == null ? "" : String(v);
+    if (/^[=+\-@\t\r]/.test(v)) v = "'" + v; // stop spreadsheets treating text as a formula
+    return /[",\n\r]/.test(v) ? '"' + v.replace(/"/g, '""') + '"' : v;
+  }
+  function exportCards(list, label) {
+    var STATUS_TXT = { available: "for sale", hidden: "hidden", sold: "sold" };
+    var head = ["name", "set", "number", "game", "condition", "price", "qty", "box", "status", "photo"];
+    var lines = [head.join(",")].concat(list.map(function (c) {
+      return [c.name, c.set_name, c.number, c.game, c.condition, (c.price_cents / 100).toFixed(2), c.qty, c.box, STATUS_TXT[c.status] || c.status, c.image_path ? imgUrl(c.image_path) : ""].map(csvCell).join(",");
+    }));
+    var blob = new Blob(["\ufeff" + lines.join("\r\n") + "\r\n"], { type: "text/csv;charset=utf-8" });
+    var a = document.createElement("a"), d = new Date();
+    a.href = URL.createObjectURL(blob);
+    a.download = "cards-" + label + "-" + d.getFullYear() + "-" + String(d.getMonth() + 1).padStart(2, "0") + "-" + String(d.getDate()).padStart(2, "0") + ".csv";
+    document.body.appendChild(a); a.click(); a.remove(); setTimeout(function () { URL.revokeObjectURL(a.href); }, 1000);
+    toast("Exported " + list.length + " card" + (list.length === 1 ? "" : "s") + ". Open it in Excel or Google Sheets, or import it back here.");
+  }
+
   // one photo of many cards → the splitter finds each card, the seller checks the boxes, each crop becomes a listing
   function openMany(file) {
     var area = document.getElementById("split-area"); if (!area || !window.BBSplit) return;
@@ -288,15 +361,22 @@
     return rows;
   }
   function mapCond(v) { var t = String(v || "").trim().toLowerCase(); if (!t) return ""; if (/psa|bgs|cgc|sgc|graded|^\d+(\.\d)?$/.test(t)) return "GR"; if (/^(nm|near)/.test(t)) return "NM"; if (/^(m|mint|gem)/.test(t)) return "M"; if (/^(lp|light|ex)/.test(t)) return "LP"; if (/^(mp|mod|vg|good)/.test(t)) return "MP"; if (/^(hp|heav)/.test(t)) return "HP"; if (/^(dmg|dam|poor)/.test(t)) return "DMG"; return ""; }
+  function mapStatus(v) { var t = String(v || "").trim().toLowerCase(); return /^(hid|hidden|off)/.test(t) ? "hidden" : /^sold/.test(t) ? "sold" : "available"; }
+  // photos from this shop's own storage go back in as storage paths (so Adjust and Rotate keep working)
+  function photoPath(v) {
+    v = String(v || "").trim(); if (!/^https?:\/\//.test(v)) return "";
+    var mine = cfg.supabaseUrl + "/storage/v1/object/public/card-photos/";
+    return v.indexOf(mine) === 0 ? decodeURIComponent(v.slice(mine.length)) : v;
+  }
   async function importCSV(text) {
     var rows = parseCSV(text); if (rows.length < 2) { toast("Paste a header row (name, price…) and at least one card."); return; }
     var head = rows[0].map(function (h) { return h.trim().toLowerCase().replace(/[^a-z0-9#]/g, ""); });
     var col = function (names) { for (var i = 0; i < head.length; i++) if (names.indexOf(head[i]) >= 0) return i; return -1; };
-    var ix = { name: col(["name", "card", "cardname", "player", "title"]), set: col(["set", "series", "setname", "product"]), number: col(["number", "no", "num", "cardnumber", "#", "card#"]), game: col(["game", "sport", "category"]), cond: col(["condition", "cond", "grade"]), price: col(["price", "value", "askingprice"]), qty: col(["qty", "quantity", "count"]), box: col(["box", "location", "bin"]), photo: col(["photo", "image", "imageurl", "picture"]) };
+    var ix = { name: col(["name", "card", "cardname", "player", "title"]), set: col(["set", "series", "setname", "product"]), number: col(["number", "no", "num", "cardnumber", "#", "card#"]), game: col(["game", "sport", "category"]), cond: col(["condition", "cond", "grade"]), price: col(["price", "value", "askingprice"]), qty: col(["qty", "quantity", "count"]), box: col(["box", "location", "bin"]), status: col(["status"]), photo: col(["photo", "image", "imageurl", "picture"]) };
     if (ix.name < 0) { toast("Couldn’t find a name column."); return; }
     var d = defaults(), get = function (r, k) { return ix[k] >= 0 ? String(r[ix[k]] || "").trim() : ""; };
     var out = rows.slice(1).filter(function (r) { return get(r, "name"); }).map(function (r) {
-      return { name: get(r, "name").slice(0, 140), set_name: get(r, "set"), number: get(r, "number").replace(/^#/, ""), game: get(r, "game") || d.game, condition: mapCond(get(r, "cond")) || d.condition, price_cents: get(r, "price") ? toCents(get(r, "price")) : d.price_cents, qty: Math.max(1, parseInt(get(r, "qty"), 10) || 1), box: get(r, "box") || d.box, image_path: /^https?:\/\//.test(get(r, "photo")) ? get(r, "photo") : "" };
+      return { name: get(r, "name").slice(0, 140), set_name: get(r, "set"), number: get(r, "number").replace(/^#/, ""), game: get(r, "game") || d.game, condition: mapCond(get(r, "cond")) || d.condition, price_cents: get(r, "price") ? toCents(get(r, "price")) : d.price_cents, qty: Math.max(1, parseInt(get(r, "qty"), 10) || 1), box: get(r, "box") || d.box, image_path: photoPath(get(r, "photo")), status: mapStatus(get(r, "status")) };
     });
     for (var i = 0; i < out.length; i += 500) { var r = await sb.from("cards").insert(out.slice(i, i + 500)); if (r.error) { toast("Import stopped: " + r.error.message); break; } }
     A.up = "Imported " + out.length + " cards."; await loadCards(); renderInventory();
@@ -349,6 +429,15 @@
     else if ((a === "adjust" || a === "rotate") && t.getAttribute("aria-disabled") === "true") { toast("Add a photo first: tap the empty photo box on this card."); }
     else if (a === "adjust") { adjustCard(id, t); }
     else if (a === "rotate") { rotateCard(id, t); }
+    else if (a === "export") { exportCards(A.cards, "all"); }
+    else if (a === "exportsel") { var sel = selIds(), set = {}; sel.forEach(function (x) { set[x] = 1; }); exportCards(A.cards.filter(function (c) { return set[c.id]; }), "selected"); }
+    else if (a === "bulkread") {
+      var targets = selIds().filter(function (sid) { var sc = A.cards.find(function (x) { return x.id === sid; }); return sc && sc.image_path; });
+      if (!targets.length) { toast("None of the selected cards have a photo yet."); return; }
+      document.getElementById("upmsg").scrollIntoView({ behavior: "smooth", block: "center" });
+      var rr = await readNames(targets.map(function (x) { return { id: x }; }));
+      if (rr.total) toast("Read " + rr.named + " of " + rr.total + " names. Check them below.");
+    }
     else if (a === "bulkrotate") {
       var withPhoto = selIds().filter(function (sid) { var sc = A.cards.find(function (x) { return x.id === sid; }); return sc && sc.image_path; });
       if (!withPhoto.length) { toast("None of the selected cards have a photo yet."); return; }
@@ -393,6 +482,7 @@
     if ((t.id === "bk-status" || t.id === "bk-condition") && t.value) { var key = t.id.slice(3), pv = {}; pv[key] = t.value; var lab = t.options[t.selectedIndex].text; bulkUpdate(pv, (key === "status" ? "Status" : "Condition") + " set to " + lab); return; }
     if (t.id === "files") { addPhotos(t.files); }
     if (t.id === "manyfile" && t.files[0]) openMany(t.files[0]);
+    if (t.id === "autoread") { try { localStorage.setItem("bb-autoread", t.checked ? "1" : "0"); } catch (e) {} }
     if (t.id === "csvfile" && t.files[0]) { var fr = new FileReader(); fr.onload = function () { importCSV(String(fr.result)); }; fr.readAsText(t.files[0]); }
     if (t.id === "onefile" && t.files[0]) { try { var path = await uploadPhoto(t.files[0]); await saveCard(t.dataset.id, { image_path: path, src_path: "", src_box: null }); await loadCards(); renderRows(); } catch (er) { toast("Photo upload failed: " + (er.message || er)); } }
   });
