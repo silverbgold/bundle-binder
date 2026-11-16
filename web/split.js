@@ -24,9 +24,60 @@ function detectBoxes(img){
   var med = function(a){ var b = a.slice().sort(function(p, q){ return p - q; }); return b[b.length >> 1]; };
   var br = med(R), bgc = med(G), bb = med(B);
   var spread = R.map(function(v, k){ return Math.abs(v - br) + Math.abs(G[k] - bgc) + Math.abs(B[k] - bb); }).sort(function(p, q){ return p - q; });
-  var T = Math.max(45, spread[Math.floor(spread.length * 0.9)] * 1.6);
+  var T = Math.min(150, Math.max(45, spread[Math.floor(spread.length * 0.5)] * 2.5 + 25));
   var m = new Uint8Array(w*h);
-  for (var i=0, k=0; i<d.length; i+=4, k++) m[k] = (Math.abs(d[i]-br) + Math.abs(d[i+1]-bgc) + Math.abs(d[i+2]-bb)) > T ? 1 : 0;
+  var darkTable = 0.3*br + 0.59*bgc + 0.11*bb < 70;   // a near-black table (darker than any card border)
+  if (darkTable) {
+    // dark table: compare each pixel with the darkest table nearby, so lamp glare and reflections on the table
+    // (which are only a little lighter than the table) don't count as card, while card faces (much lighter or colourful) do
+    var rad = Math.max(6, Math.round(Math.min(w, h) * 0.22));
+    var tmp = new Float32Array(w*h), lo = new Float32Array(w*h), loc = new Float32Array(w*h);
+    function minPass(src, dst, horiz){
+      var n = horiz ? w : h, lines = horiz ? h : w, q = new Int32Array(n), buf = new Float32Array(n);
+      for (var L=0; L<lines; L++){
+        for (var t=0; t<n; t++) buf[t] = src[horiz ? L*w + t : t*w + L];
+        // sliding-window minimum (monotonic queue)
+        var head = 0, tail = 0;
+        for (var t2=0; t2<n + rad; t2++){
+          if (t2 < n){ while (tail > head && buf[q[tail-1]] >= buf[t2]) tail--; q[tail++] = t2; }
+          var c0 = t2 - rad; if (c0 < 0) continue;
+          while (q[head] < c0 - rad) head++;
+          dst[horiz ? L*w + c0 : c0*w + L] = buf[q[head]];
+        }
+      }
+    }
+    function boxPass(src, dst, horiz){
+      var n = horiz ? w : h, lines = horiz ? h : w;
+      for (var L=0; L<lines; L++){
+        var sum = 0, cnt = 0, at = function(t){ return src[horiz ? L*w + t : t*w + L]; };
+        for (var t=0; t<Math.min(n, rad); t++){ sum += at(t); cnt++; }
+        for (var c0=0; c0<n; c0++){
+          var add = c0 + rad, drop = c0 - rad - 1;
+          if (add < n){ sum += at(add); cnt++; } if (drop >= 0){ sum -= at(drop); cnt--; }
+          dst[horiz ? L*w + c0 : c0*w + L] = sum / cnt;
+        }
+      }
+    }
+    minPass(gray, tmp, true); minPass(tmp, lo, false);
+    boxPass(lo, tmp, true); boxPass(tmp, loc, false);
+    // streakiness (structure-tensor coherence): glare on wood grain is a field of parallel lines; card art isn't
+    var jxx = new Float32Array(w*h), jyy = new Float32Array(w*h), jxy = new Float32Array(w*h);
+    for (var sy=1; sy<h-1; sy++) for (var sx=1; sx<w-1; sx++){
+      var q0 = sy*w + sx, gxv = gray[q0+1] - gray[q0-1], gyv = gray[q0+w] - gray[q0-w];
+      jxx[q0] = gxv*gxv; jyy[q0] = gyv*gyv; jxy[q0] = gxv*gyv;
+    }
+    var rad0 = rad; rad = 3;
+    boxPass(jxx, tmp, true); boxPass(tmp, jxx, false); boxPass(jyy, tmp, true); boxPass(tmp, jyy, false); boxPass(jxy, tmp, true); boxPass(tmp, jxy, false);
+    rad = rad0;
+    for (var i=0, k=0; i<d.length; i+=4, k++){
+      var lift = gray[k] - loc[k], sat = Math.max(d[i], d[i+1], d[i+2]) - Math.min(d[i], d[i+1], d[i+2]);
+      var en = jxx[k] + jyy[k], coh = en > 1 ? Math.sqrt((jxx[k] - jyy[k]) * (jxx[k] - jyy[k]) + 4 * jxy[k] * jxy[k]) / en : 0;
+      var streaky = coh > 0.55 && en > 120;
+      m[k] = (lift > 120 || (sat > 55 && lift > 25) || (lift > 50 && !streaky)) ? 1 : 0;
+    }
+  } else {
+    for (var i=0, k=0; i<d.length; i+=4, k++) m[k] = (Math.abs(d[i]-br) + Math.abs(d[i+1]-bgc) + Math.abs(d[i+2]-bb)) > T ? 1 : 0;
+  }
   // light closing (radius 1) so specks inside a card join up but real gaps stay open
   function morph(src, grow){
     var out = new Uint8Array(w*h);
@@ -40,6 +91,12 @@ function detectBoxes(img){
       out[yy*w + xx] = v;
     }
     return out;
+  }
+  if (darkTable) {
+    // fill small gaps inside each card, then cut the thin necks of table glare that join neighbouring cards
+    var rr = Math.max(3, Math.round(Math.min(w, h) * 0.018)), ii;
+    for (ii=0; ii<3; ii++) m = morph(m, true); for (ii=0; ii<3; ii++) m = morph(m, false);
+    for (ii=0; ii<rr; ii++) m = morph(m, false); for (ii=0; ii<rr; ii++) m = morph(m, true);
   }
   m = morph(morph(m, true), false);
   // connected components
@@ -119,6 +176,7 @@ function detectBoxes(img){
     }
     out.push(r);
   }
+
   comps.forEach(function(c){ split(c, 0); });
   // drop fragments and boxes sitting inside bigger ones
   var areas = out.map(function(r){ return (r.x1 - r.x0) * (r.y1 - r.y0); }).sort(function(p, q){ return p - q; });
@@ -160,6 +218,117 @@ function detectBoxes(img){
     return { cx: cu*best.ux - cvv*best.uy, cy: cu*best.uy + cvv*best.ux, w: bw, h: bh, a: ang, r: 0 };
   }
   var boxes = out.map(minRect);
+  // every card in one photo is the same size: use that to split blobs of touching cards and drop clutter
+  (function(){
+    var cardish = boxes.filter(function(b){ var q = Math.min(b.w, b.h) / Math.max(b.w, b.h); return q > 0.62 && q < 0.8; });
+    if (cardish.length < 2) return;
+    var md = function(a){ a = a.slice().sort(function(p, q){ return p - q; }); return a[a.length >> 1]; };
+    var Lc = md(cardish.map(function(b){ return Math.max(b.w, b.h); })) / sx, Sc = md(cardish.map(function(b){ return Math.min(b.w, b.h); })) / sx, Ac = Lc * Sc;
+    var keep = [], extra = [];
+    out.forEach(function(r, idx){
+      var b = boxes[idx], bw = (r.x1 - r.x0), bh = (r.y1 - r.y0);
+      var touches = r.x0 <= 3 || r.y0 <= 3 || r.x1 >= w - 3 || r.y1 >= h - 3;
+      var areaS = (b.w / sx) * (b.h / sy);
+      if (touches && areaS < 0.75 * Ac) return;            // clutter at the photo's edge (a lanyard, a box corner)
+      if (areaS < 1.7 * Ac){ keep.push(b); return; }
+      // a blob of several cards: cluster its pixels, fit a card-sized box to each cluster, keep boxes that are mostly card
+      // fit to the colourful card faces, not to grey glare that joins them
+      var face = function(q){ var i4 = q * 4, mx = Math.max(d[i4], d[i4+1], d[i4+2]), mn = Math.min(d[i4], d[i4+1], d[i4+2]); return mx - mn > 45 && mx > 60; };
+      var pts = [];
+      for (var yy=r.y0; yy<r.y1; yy++) for (var xx=r.x0; xx<r.x1; xx++){ var q5 = yy*w + xx; if (lab[q5] === r.id && face(q5)) pts.push(xx, yy); }
+      if (pts.length < 2 * 0.3 * Ac){ keep.push(b); return; }
+      var np = pts.length >> 1, inR = function(px, py){ return px >= r.x0 && py >= r.y0 && px < r.x1 && py < r.y1 && lab[py*w + px] === r.id && face(py*w + px); };
+      function cover(c){
+        var ca = Math.cos(c.a), sa = Math.sin(c.a), hit = 0, n = 0;
+        for (var i=0;i<10;i++) for (var j=0;j<14;j++){
+          var u = ((i + 0.5) / 10 - 0.5) * c.w, v = ((j + 0.5) / 14 - 0.5) * c.h;
+          var px = Math.round(c.cx + u*ca - v*sa), py = Math.round(c.cy + u*sa + v*ca); n++;
+          if (inR(px, py)) hit++;
+        }
+        return hit / n;
+      }
+      // how sharply the face is brighter than just outside its four edges
+      function edgeScore(c){
+        var ca = Math.cos(c.a), sa = Math.sin(c.a), tot = 0, n = 0, off = Math.max(1.5, Sc * 0.03);
+        for (var e=0; e<4; e++){
+          var horiz = e < 2, sgn = e % 2 ? 1 : -1, len = horiz ? c.w : c.h, half = horiz ? c.h / 2 : c.w / 2;
+          for (var t=0; t<16; t++){
+            var along = ((t + 0.5) / 16 - 0.5) * len * 0.9, inN = sgn * (half - off), outN = sgn * (half + off);
+            var ux = horiz ? along : inN, uy = horiz ? inN : along, ox = horiz ? along : outN, oy = horiz ? outN : along;
+            var ix = Math.round(c.cx + ux*ca - uy*sa), iy = Math.round(c.cy + ux*sa + uy*ca), jx = Math.round(c.cx + ox*ca - oy*sa), jy = Math.round(c.cy + ox*sa + oy*ca);
+            if (ix < 0 || iy < 0 || jx < 0 || jy < 0 || ix >= w || jx >= w || iy >= h || jy >= h) continue;
+            tot += Math.min(80, gray[iy*w + ix] - gray[jy*w + jx]); n++;
+          }
+        }
+        return n ? tot / n : -999;
+      }
+      function climb(c0, f){
+        var a00 = c0.a, v0 = f(c0), steps = [[Sc * 0.08, 0.06], [Sc * 0.04, 0.03], [Sc * 0.02, 0.012]];
+        for (var si=0; si<steps.length; si++){
+          var improved = true, guard = 0, st = steps[si][0], sa2 = steps[si][1];
+          while (improved && guard++ < 40){
+            improved = false;
+            [[st,0,0,1],[-st,0,0,1],[0,st,0,1],[0,-st,0,1],[0,0,sa2,1],[0,0,-sa2,1],[0,0,0,1 + sa2 / 2],[0,0,0,1 - sa2 / 2]].forEach(function(mv){
+              var c1 = { cx: c0.cx + mv[0], cy: c0.cy + mv[1], w: c0.w * mv[3], h: c0.h * mv[3], a: c0.a + mv[2] };
+              if (Math.abs(c1.a - a00) > 0.3 || Math.max(c1.w, c1.h) > Lc * 1.12 || Math.max(c1.w, c1.h) < Lc * 0.88) return;
+              var v1 = f(c1);
+              if (v1 > v0 + 1e-6){ c0 = c1; v0 = v1; improved = true; }
+            });
+          }
+        }
+        return { c: c0, v: v0 };
+      }
+      var best = null, kMax = Math.min(6, Math.ceil(areaS / Ac) + 1);
+      for (var k=2; k<=kMax; k++){
+        // k-means with farthest-point start
+        var cs = [[pts[0], pts[1]]];
+        while (cs.length < k){ var far = -1, fi = 0; for (var p=0; p<np; p+=3){ var dmin = Infinity; cs.forEach(function(c){ var dx = pts[2*p] - c[0], dy = pts[2*p+1] - c[1]; dmin = Math.min(dmin, dx*dx + dy*dy); }); if (dmin > far){ far = dmin; fi = p; } } cs.push([pts[2*fi], pts[2*fi+1]]); }
+        var asg = new Int32Array(np);
+        for (var it=0; it<12; it++){
+          var acc = cs.map(function(){ return [0, 0, 0]; });
+          for (var p2=0; p2<np; p2++){ var bi = 0, bd = Infinity; for (var c2=0; c2<k; c2++){ var dx2 = pts[2*p2] - cs[c2][0], dy2 = pts[2*p2+1] - cs[c2][1], dd = dx2*dx2 + dy2*dy2; if (dd < bd){ bd = dd; bi = c2; } } asg[p2] = bi; acc[bi][0] += pts[2*p2]; acc[bi][1] += pts[2*p2+1]; acc[bi][2]++; }
+          cs = acc.map(function(a2, c3){ return a2[2] ? [a2[0] / a2[2], a2[1] / a2[2]] : cs[c3]; });
+        }
+        var rects = [];
+        for (var c4=0; c4<k; c4++){
+          var mxx = 0, myy = 0, mxy = 0, cnt = 0;
+          for (var p3=0; p3<np; p3++) if (asg[p3] === c4){ var ex = pts[2*p3] - cs[c4][0], ey = pts[2*p3+1] - cs[c4][1]; mxx += ex*ex; myy += ey*ey; mxy += ex*ey; cnt++; }
+          if (cnt < 0.15 * Ac) continue;
+          var ang = 0.5 * Math.atan2(2*mxy, mxx - myy);   // long axis of the cluster
+          var bestC = null;
+          [ang, ang + Math.PI / 2, 0, Math.PI / 2, 0.2, -0.2, 0.35, -0.35, Math.PI / 2 + 0.2, Math.PI / 2 - 0.2, Math.PI / 2 + 0.35, Math.PI / 2 - 0.35].forEach(function(a0){
+            // place it over the card face first, then line its edges up with the card's border
+            var c0 = climb({ cx: cs[c4][0], cy: cs[c4][1], w: Lc, h: Sc, a: a0 }, cover).c;
+            var fit = climb(c0, edgeScore), cv = cover(fit.c);
+            if (cv >= 0.4 && (!bestC || fit.v > bestC.v)) bestC = { c: fit.c, cov: cv, v: fit.v };
+          });
+          if (bestC) rects.push(bestC);
+        }
+        // drop boxes that overlap a better one (two boxes on one card)
+        rects.sort(function(p, q){ return q.cov - p.cov; });
+        var inside = function(c, px, py){ var ca = Math.cos(c.a), sa = Math.sin(c.a), dx = px - c.cx, dy = py - c.cy; return Math.abs(dx*ca + dy*sa) <= c.w/2 && Math.abs(-dx*sa + dy*ca) <= c.h/2; };
+        var chosen = [];
+        rects.forEach(function(x){
+          var ov = 0, n2 = 0, ca = Math.cos(x.c.a), sa = Math.sin(x.c.a);
+          for (var i=0;i<8;i++) for (var j=0;j<10;j++){ var u = ((i + 0.5) / 8 - 0.5) * x.c.w, v = ((j + 0.5) / 10 - 0.5) * x.c.h, px = x.c.cx + u*ca - v*sa, py = x.c.cy + u*sa + v*ca; n2++; if (chosen.some(function(y){ return inside(y.c, px, py); })) ov++; }
+          if (ov / n2 < 0.2) chosen.push(x);
+        });
+        // how much of the blob the boxes explain; more boxes must explain clearly more
+        var expl = 0, tot = 0;
+        for (var p4=0; p4<np; p4+=2){ tot++; if (chosen.some(function(y){ return inside(y.c, pts[2*p4], pts[2*p4+1]); })) expl++; }
+        var frac = tot ? expl / tot : 0;
+        if (!best || frac > best.frac + 0.06 * Math.max(0, chosen.length - best.rects.length)) best = { rects: chosen, frac: frac };
+      }
+      if (!best || !best.rects.length){ keep.push(b); return; }
+      best.rects.forEach(function(x){
+        var c = x.c, a2 = c.a, bw2 = c.w, bh2 = c.h, t;
+        while (a2 > Math.PI/4){ a2 -= Math.PI/2; t = bw2; bw2 = bh2; bh2 = t; }
+        while (a2 <= -Math.PI/4){ a2 += Math.PI/2; t = bw2; bw2 = bh2; bh2 = t; }
+        extra.push({ cx: c.cx * sx, cy: c.cy * sy, w: bw2 * sx, h: bh2 * sy, a: Math.abs(a2) < 0.03 ? 0 : a2, r: 0 });
+      });
+    });
+    boxes = keep.concat(extra);
+  })();
   // cards in one photo are the same size: grow any box that came out short, toward the side with more card detail
   var gm = new Float32Array(w*h);
   for (var gy=1; gy<h-1; gy++) for (var gx=1; gx<w-1; gx++){ var gk = gy*w + gx; gm[gk] = Math.abs(gray[gk+1] - gray[gk-1]) + Math.abs(gray[gk+w] - gray[gk-w]); }
