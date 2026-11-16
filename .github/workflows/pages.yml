@@ -33,8 +33,8 @@ jobs:
         run: |
           sleep 15
           for i in $(seq 1 60); do
-            n=$(gh run list -R "$GITHUB_REPOSITORY" --commit "$GITHUB_SHA" --json workflowName,status \
-                -q '[.[] | select(.workflowName == "pages build and deployment" and .status != "completed")] | length')
+            n=$(gh run list -R "$GITHUB_REPOSITORY" --commit "$GITHUB_SHA" --json workflowName,name,status \
+                -q '[.[] | select((.workflowName == "pages-build-deployment" or .name == "pages build and deployment") and .status != "completed")] | length')
             [ "$n" = "0" ] && exit 0
             echo "Waiting for the branch deploy to finish..."; sleep 5
           done
