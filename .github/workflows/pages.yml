@@ -11,6 +11,7 @@ permissions:
   contents: read
   pages: write
   id-token: write
+  actions: read
 
 concurrency:
   group: pages
@@ -24,6 +25,19 @@ jobs:
       url: ${{ steps.deployment.outputs.page_url }}
     steps:
       - uses: actions/checkout@v4
+      # If Pages is still set to "Deploy from a branch", GitHub also publishes the README on every push.
+      # Wait for that to finish so the shop is always deployed last. (No-op once Source is "GitHub Actions".)
+      - name: Wait for GitHub's branch deploy
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          sleep 15
+          for i in $(seq 1 60); do
+            n=$(gh run list -R "$GITHUB_REPOSITORY" --commit "$GITHUB_SHA" --json workflowName,status \
+                -q '[.[] | select(.workflowName == "pages build and deployment" and .status != "completed")] | length')
+            [ "$n" = "0" ] && exit 0
+            echo "Waiting for the branch deploy to finish..."; sleep 5
+          done
       - uses: actions/configure-pages@v5
       - uses: actions/upload-pages-artifact@v3
         with:
