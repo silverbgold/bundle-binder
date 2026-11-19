@@ -69,6 +69,7 @@
   async function loadBoxes() {
     var r = await sb.from("boxes").select("*").order("created_at", { ascending: true });
     A.boxes = r.error ? [] : (r.data || []);
+    A.boxesReady = !r.error;                       // the boxes table exists (hide box features until it does)
   }
   function busy() { var a = document.activeElement; return a && /^(INPUT|TEXTAREA|SELECT)$/.test(a.tagName); }
 
@@ -76,7 +77,7 @@
   function render() {
     var open = A.orders.filter(function (o) { return o.status === "awaiting_payment" || o.status === "paid"; }).length;
     app.innerHTML = '<div class="wrap"><header class="top"><div><div class="eyebrow">Seller dashboard</div><h1>' + esc(A.settings.shop_name) + '</h1></div>'
-      + '<div class="tabs"><button data-act="tab" data-tab="orders" aria-pressed="' + (A.tab === "orders") + '">Orders' + (open ? ' (' + open + ')' : '') + '</button><button data-act="tab" data-tab="inventory" aria-pressed="' + (A.tab === "inventory") + '">Inventory</button><button data-act="tab" data-tab="boxes" aria-pressed="' + (A.tab === "boxes") + '">Boxes</button><button data-act="tab" data-tab="settings" aria-pressed="' + (A.tab === "settings") + '">Settings</button><button data-act="signout">Sign out</button></div></header>'
+      + '<div class="tabs"><button data-act="tab" data-tab="orders" aria-pressed="' + (A.tab === "orders") + '">Orders' + (open ? ' (' + open + ')' : '') + '</button><button data-act="tab" data-tab="inventory" aria-pressed="' + (A.tab === "inventory") + '">Inventory</button>' + (A.boxesReady ? '<button data-act="tab" data-tab="boxes" aria-pressed="' + (A.tab === "boxes") + '">Boxes</button>' : '') + '<button data-act="tab" data-tab="settings" aria-pressed="' + (A.tab === "settings") + '">Settings</button><button data-act="signout">Sign out</button></div></header>'
       + '<div class="adm" id="main"></div></div>';
     if (A.tab === "orders") renderOrders(); else if (A.tab === "inventory") renderInventory(); else if (A.tab === "boxes") renderBoxes(); else renderSettings();
   }
@@ -127,7 +128,7 @@
     var h = '<label class="selall"><input type="checkbox" id="selall"' + (all ? ' checked' : '') + (list.length ? '' : ' disabled') + '> Select all' + (A.q.trim() ? ' matching' : '') + ' (' + list.length + ')</label>';
     if (n) h += '<div class="bulkbar" role="region" aria-label="Change selected cards"><b>' + n + ' selected</b>'
       + '<span class="bk"><input id="bk-price" inputmode="decimal" placeholder="Price" aria-label="New price"><button class="btn sm" data-act="bulk" data-k="price_cents">Set price</button></span>'
-      + '<span class="bk"><select id="bk-movebox" aria-label="Move to box"><option value="">Move to box…</option>' + boxNames().map(function (nm) { return '<option value="' + esc(nm) + '">' + esc(nm) + '</option>'; }).join("") + '<option value="__new">New box…</option><option value="__none">No box</option></select></span>'
+      + (!A.boxesReady ? '' : '<span class="bk"><select id="bk-movebox" aria-label="Move to box"><option value="">Move to box…</option>' + boxNames().map(function (nm) { return '<option value="' + esc(nm) + '">' + esc(nm) + '</option>'; }).join("") + '<option value="__new">New box…</option><option value="__none">No box</option></select></span>')
       + '<span class="bk"><select id="bk-status" aria-label="New status"><option value="">Status…</option><option value="available">For sale</option><option value="hidden">Hidden</option><option value="sold">Sold</option></select></span>'
       + '<span class="bk"><select id="bk-condition" aria-label="New condition"><option value="">Condition…</option>' + condOpts("") + '</select></span>'
       + '<span class="bk"><input id="bk-game" placeholder="Game" aria-label="New game"><button class="btn sm" data-act="bulk" data-k="game">Set game</button></span>'
