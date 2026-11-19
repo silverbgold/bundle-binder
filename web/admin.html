@@ -39,6 +39,26 @@
 .autoread{display:flex;align-items:flex-start;gap:8px;font-size:14px;font-weight:600;cursor:pointer}
 .autoread input{width:16px;height:16px;margin-top:2px;accent-color:var(--accent)}
 .irow.justread{box-shadow:0 0 0 2px var(--ok);transition:box-shadow .3s}
+.boxgrid{display:grid;grid-template-columns:repeat(auto-fill,minmax(230px,1fr));gap:12px}
+.boxtile{display:flex;flex-direction:column;gap:10px;text-align:left;padding:12px;border:1px solid var(--line);border-radius:12px;background:var(--surface);color:var(--ink);cursor:pointer;font:inherit}
+.boxtile:hover{border-color:var(--accent);box-shadow:0 0 0 1px var(--accent)}
+.boxart{display:flex;gap:6px;height:84px;align-items:stretch;background:var(--sunken);border-radius:8px;padding:6px;overflow:hidden}
+.boxart img{height:100%;aspect-ratio:63/88;object-fit:cover;border-radius:4px}
+.boxempty{margin:auto;color:var(--muted);font-size:28px}
+.boxinfo{display:flex;flex-direction:column;gap:4px;align-items:flex-start}
+.boxinfo b{font-size:15px}
+.boxhead{display:flex;flex-wrap:wrap;gap:12px;align-items:flex-end}
+.boxstats{display:flex;flex-wrap:wrap;gap:8px 18px;font-size:14px;color:var(--muted)}
+.boxstats b{color:var(--ink);font-family:var(--f-mono)}
+.boxlist,.mvlist{display:flex;flex-direction:column;gap:6px}
+.mvlist{max-height:360px;overflow:auto;padding-right:4px}
+.brow2,.mvrow{display:grid;grid-template-columns:34px minmax(0,1fr) auto auto auto;gap:10px;align-items:center;padding:6px 8px;border:1px solid var(--line);border-radius:8px;font-size:13.5px}
+.mvrow{grid-template-columns:auto 34px minmax(0,1fr) auto;cursor:pointer}
+.mvrow:hover{border-color:var(--accent)}
+.brow2 .thumb,.mvrow .thumb{width:34px;aspect-ratio:63/88;border-radius:3px;background:var(--sunken);overflow:hidden;display:block}
+.brow2 .thumb img,.mvrow .thumb img{width:100%;height:100%;object-fit:cover;display:block}
+.bname{min-width:0}.bname b{display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.bname small{display:block;color:var(--muted);font-size:12px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+@media (max-width:640px){.brow2{grid-template-columns:34px minmax(0,1fr) auto}.brow2 .chip,.brow2 .btn{grid-column:2 / -1;justify-self:start}}
 .drops{display:grid;grid-template-columns:1fr 1fr;gap:12px}
 @media (max-width:640px){.drops{grid-template-columns:1fr}}
 .drop:hover{border-color:var(--muted)}

@@ -40,6 +40,15 @@ create table if not exists cards (
   created_at  timestamptz not null default now()
 );
 
+-- storage boxes (cards.box holds the box name)
+create table if not exists boxes (
+  name       text primary key check (length(trim(name)) between 1 and 80),
+  note       text not null default '',
+  posted_at  timestamptz,
+  created_at timestamptz not null default now()
+);
+create index if not exists cards_box_idx on cards (box);
+
 -- upgrade older databases
 alter table cards add column if not exists src_path text not null default '';
 alter table cards add column if not exists src_box jsonb;
@@ -418,6 +427,11 @@ drop policy if exists addons_write   on addons;    create policy addons_write   
 drop policy if exists orders_read    on orders;    create policy orders_read    on orders    for select using (holder = auth.uid() or is_admin());
 drop policy if exists items_read     on order_items; create policy items_read   on order_items for select using (is_admin() or exists (select 1 from orders o where o.id = order_id and o.holder = auth.uid()));
 drop policy if exists holds_admin    on holds;     create policy holds_admin    on holds     for select using (is_admin());
+alter table boxes enable row level security;
+drop policy if exists boxes_read   on boxes; create policy boxes_read   on boxes for select using (is_admin());
+drop policy if exists boxes_insert on boxes; create policy boxes_insert on boxes for insert with check (is_admin());
+drop policy if exists boxes_update on boxes; create policy boxes_update on boxes for update using (is_admin()) with check (is_admin());
+drop policy if exists boxes_delete on boxes; create policy boxes_delete on boxes for delete using (is_admin());
 -- (no insert/update policies on orders, order_items or holds: they only change through the functions above)
 
 -- Signed-out visitors can only browse (shop_cards). Carts and orders need a login; buyers get a guest login automatically.

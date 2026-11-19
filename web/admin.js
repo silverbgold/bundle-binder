@@ -10,7 +10,7 @@
   var sb = window.supabase.createClient(cfg.supabaseUrl, cfg.supabaseAnonKey);
   var CONDS = [["M", "Mint"], ["NM", "Near Mint"], ["LP", "Lightly Played"], ["MP", "Moderately Played"], ["HP", "Heavily Played"], ["DMG", "Damaged"], ["GR", "Graded"]];
   var STATUS = { awaiting_payment: ["Awaiting payment", "warn"], paid: ["Paid · ship it", "ok"], shipped: ["Shipped", "acc"], cancelled: ["Cancelled", ""], expired: ["Expired", "bad"] };
-  var A = { tab: "orders", filter: "open", orders: [], holds: [], cards: [], settings: null, bundles: [], addons: [], q: "", limit: 100, sel: {}, msg: "", up: "" };
+  var A = { tab: "orders", filter: "open", orders: [], holds: [], cards: [], settings: null, bundles: [], addons: [], q: "", limit: 100, sel: {}, boxes: [], box: null, boxQ: "", mv: {}, msg: "", up: "" };
 
   function esc(s) { return String(s == null ? "" : s).replace(/[&<>"']/g, function (c) { return { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]; }); }
   function money(c) { var sym = (A.settings && A.settings.currency_symbol) || "$"; c = Math.round(c || 0); return sym + (Math.floor(c / 100)).toLocaleString("en-US") + "." + String(c % 100).padStart(2, "0"); }
@@ -52,7 +52,7 @@
       sb.from("addons").select("*").order("sort")
     ]);
     A.settings = res[0].data; A.bundles = res[1].data || []; A.addons = res[2].data || [];
-    await Promise.all([loadOrders(), loadCards()]);
+    await Promise.all([loadOrders(), loadCards(), loadBoxes()]);
   }
   async function loadOrders() {
     await sb.rpc("expire_orders").then(function () {}, function () {});
@@ -66,15 +66,19 @@
     var r = await sb.from("cards").select("*").order("created_at", { ascending: false }).limit(5000);
     A.cards = r.data || [];
   }
+  async function loadBoxes() {
+    var r = await sb.from("boxes").select("*").order("created_at", { ascending: true });
+    A.boxes = r.error ? [] : (r.data || []);
+  }
   function busy() { var a = document.activeElement; return a && /^(INPUT|TEXTAREA|SELECT)$/.test(a.tagName); }
 
   /* ---------- render ---------- */
   function render() {
     var open = A.orders.filter(function (o) { return o.status === "awaiting_payment" || o.status === "paid"; }).length;
     app.innerHTML = '<div class="wrap"><header class="top"><div><div class="eyebrow">Seller dashboard</div><h1>' + esc(A.settings.shop_name) + '</h1></div>'
-      + '<div class="tabs"><button data-act="tab" data-tab="orders" aria-pressed="' + (A.tab === "orders") + '">Orders' + (open ? ' (' + open + ')' : '') + '</button><button data-act="tab" data-tab="inventory" aria-pressed="' + (A.tab === "inventory") + '">Inventory</button><button data-act="tab" data-tab="settings" aria-pressed="' + (A.tab === "settings") + '">Settings</button><button data-act="signout">Sign out</button></div></header>'
+      + '<div class="tabs"><button data-act="tab" data-tab="orders" aria-pressed="' + (A.tab === "orders") + '">Orders' + (open ? ' (' + open + ')' : '') + '</button><button data-act="tab" data-tab="inventory" aria-pressed="' + (A.tab === "inventory") + '">Inventory</button><button data-act="tab" data-tab="boxes" aria-pressed="' + (A.tab === "boxes") + '">Boxes</button><button data-act="tab" data-tab="settings" aria-pressed="' + (A.tab === "settings") + '">Settings</button><button data-act="signout">Sign out</button></div></header>'
       + '<div class="adm" id="main"></div></div>';
-    if (A.tab === "orders") renderOrders(); else if (A.tab === "inventory") renderInventory(); else renderSettings();
+    if (A.tab === "orders") renderOrders(); else if (A.tab === "inventory") renderInventory(); else if (A.tab === "boxes") renderBoxes(); else renderSettings();
   }
   function renderOrders() {
     var el = document.getElementById("main"); if (!el || A.tab !== "orders") return;
@@ -123,6 +127,7 @@
     var h = '<label class="selall"><input type="checkbox" id="selall"' + (all ? ' checked' : '') + (list.length ? '' : ' disabled') + '> Select all' + (A.q.trim() ? ' matching' : '') + ' (' + list.length + ')</label>';
     if (n) h += '<div class="bulkbar" role="region" aria-label="Change selected cards"><b>' + n + ' selected</b>'
       + '<span class="bk"><input id="bk-price" inputmode="decimal" placeholder="Price" aria-label="New price"><button class="btn sm" data-act="bulk" data-k="price_cents">Set price</button></span>'
+      + '<span class="bk"><select id="bk-movebox" aria-label="Move to box"><option value="">Move to box…</option>' + boxNames().map(function (nm) { return '<option value="' + esc(nm) + '">' + esc(nm) + '</option>'; }).join("") + '<option value="__new">New box…</option><option value="__none">No box</option></select></span>'
       + '<span class="bk"><select id="bk-status" aria-label="New status"><option value="">Status…</option><option value="available">For sale</option><option value="hidden">Hidden</option><option value="sold">Sold</option></select></span>'
       + '<span class="bk"><select id="bk-condition" aria-label="New condition"><option value="">Condition…</option>' + condOpts("") + '</select></span>'
       + '<span class="bk"><input id="bk-game" placeholder="Game" aria-label="New game"><button class="btn sm" data-act="bulk" data-k="game">Set game</button></span>'
@@ -158,6 +163,88 @@
         + f("box", "Box", '<input data-f="box" value="' + esc(c.box) + '">') + '</div><button class="btn sm danger" data-act="del" data-id="' + c.id + '">Delete</button></div>';
     }).join("") + (list.length > A.limit ? '<div class="more"><button class="btn" data-act="more">Show more (' + (list.length - A.limit) + ')</button></div>' : '') + (!list.length ? '<p class="empty">No cards yet.</p>' : '');
   }
+  /* ---------- storage boxes ---------- */
+  function boxNames() {
+    var set = {}, out = [];
+    A.boxes.forEach(function (b) { if (!set[b.name]) { set[b.name] = 1; out.push(b.name); } });
+    A.cards.forEach(function (c) { var nm = (c.box || "").trim(); if (nm && !set[nm]) { set[nm] = 1; out.push(nm); } });
+    return out;
+  }
+  function boxCards(nm) { return A.cards.filter(function (c) { return (c.box || "").trim() === nm; }); }
+  function boxStats(nm) {
+    var cs = boxCards(nm), st = { n: cs.length, live: 0, draft: 0, sold: 0, value: 0 };
+    cs.forEach(function (c) { if (c.status === "available") { st.live++; st.value += c.price_cents * c.qty; } else if (c.status === "hidden") { st.draft++; st.value += c.price_cents * c.qty; } else st.sold++; });
+    st.state = !st.n ? "empty" : st.draft === 0 && st.live ? "live" : st.live === 0 && st.draft ? "unposted" : st.draft ? "partly" : "sold";
+    return st;
+  }
+  var BOX_STATE = { empty: ["Empty", ""], live: ["Posted", "ok"], unposted: ["Not posted", "warn"], partly: ["Partly posted", "warn"], sold: ["Sold out", ""] };
+  async function ensureBox(nm) {
+    if (A.boxes.some(function (b) { return b.name === nm; })) return true;
+    var r = await sb.from("boxes").insert({ name: nm }).select().single();
+    if (r.error && !/duplicate/i.test(r.error.message)) { toast("Couldn’t create the box: " + r.error.message); return false; }
+    if (r.data) A.boxes.push(r.data);
+    return true;
+  }
+  function renderBoxes() {
+    var el = document.getElementById("main"); if (!el || A.tab !== "boxes") return;
+    if (A.box) { renderBoxView(el); return; }
+    var names = boxNames();
+    el.innerHTML = '<section class="panel" style="display:flex;flex-direction:column;gap:12px"><div class="row2"><h2>Storage boxes</h2><span class="note">' + names.length + ' box' + (names.length === 1 ? '' : 'es') + '</span></div>'
+      + '<p class="note">Put cards into a box, then <b>Post box</b> to put all of its cards on sale at once. Cards added inside a box wait, unposted, until you post it.</p>'
+      + '<div class="toolbar" style="margin:0"><input id="newbox" placeholder="New box name, e.g. 50 MLB #3 or Lorcana Binder A" maxlength="80" style="flex:1 1 260px"><button class="btn primary" data-act="box-new">Create box</button></div>'
+      + (names.length ? '<div class="boxgrid">' + names.map(function (nm) {
+        var st = boxStats(nm), sl = BOX_STATE[st.state], cover = boxCards(nm).filter(function (c) { return c.image_path; }).slice(0, 3);
+        return '<button class="boxtile" data-act="box-open" data-box="' + esc(nm) + '"><span class="boxart">' + (cover.length ? cover.map(function (c) { return '<img src="' + esc(imgUrl(c.image_path)) + '" alt="" loading="lazy">'; }).join("") : '<span class="boxempty">▢</span>') + '</span>'
+          + '<span class="boxinfo"><b>' + esc(nm) + '</b><span class="note">' + st.n + ' card' + (st.n === 1 ? '' : 's') + (st.n ? ' · ' + money(st.value) : '') + '</span><span class="chip ' + sl[1] + '">' + sl[0] + (st.state === "partly" ? ' · ' + st.draft + ' waiting' : '') + '</span></span></button>';
+      }).join("") + '</div>' : '<p class="empty">No boxes yet. Create one above, or use “Move to box” on the Inventory tab.</p>')
+      + '</section>';
+  }
+  function renderBoxView(el) {
+    var nm = A.box, st = boxStats(nm), bx = A.boxes.find(function (b) { return b.name === nm; }) || { note: "" }, sl = BOX_STATE[st.state];
+    el.innerHTML = '<section class="panel" style="display:flex;flex-direction:column;gap:12px">'
+      + '<div class="row2"><button class="btn ghost sm" data-act="box-back">← All boxes</button><span class="chip ' + sl[1] + '">' + sl[0] + '</span></div>'
+      + '<div class="boxhead"><label class="field" style="flex:1 1 240px">Box name<input id="box-name" value="' + esc(nm) + '" maxlength="80"></label><label class="field" style="flex:2 1 300px">Note (where it is, what’s in it)<input id="box-note" value="' + esc(bx.note || "") + '" maxlength="300"></label><button class="btn sm" data-act="box-rename" style="align-self:flex-end">Save name</button></div>'
+      + '<div class="boxstats"><span><b>' + st.n + '</b> cards</span><span><b>' + st.live + '</b> on sale</span><span><b>' + st.draft + '</b> waiting to post</span>' + (st.sold ? '<span><b>' + st.sold + '</b> sold</span>' : '') + '<span><b>' + money(st.value) + '</b> value</span></div>'
+      + '<div class="toolbar" style="margin:0"><button class="btn primary" data-act="box-post"' + (st.draft ? '' : ' disabled') + '>Post box' + (st.draft ? ' (' + st.draft + ' card' + (st.draft === 1 ? '' : 's') + ')' : '') + '</button>'
+      + '<button class="btn" data-act="box-unpost"' + (st.live ? '' : ' disabled') + '>Unpost (hide from shop)</button><button class="btn" data-act="box-print"' + (st.n ? '' : ' disabled') + '>Print contents</button><button class="btn danger" data-act="box-del">Delete box</button></div></section>'
+      // add new cards into this box
+      + '<section class="panel" style="display:flex;flex-direction:column;gap:12px"><h2>Add cards to this box</h2>'
+      + '<div class="cols"><label class="field">Default price<input id="d-price" value="1.00" inputmode="decimal"></label><label class="field">Default game<input id="d-game" placeholder="e.g. Lorcana"></label><label class="field">Default condition<select id="d-cond">' + condOpts("NM") + '</select></label><input type="hidden" id="d-box" value="' + esc(nm) + '"></div>'
+      + '<div class="drops"><div class="drop" id="drop" tabindex="0" role="button"><b>One card per photo</b><br><span class="note">Drop photos here or click to choose.</span></div><div class="drop" id="dropmany" tabindex="0" role="button"><b>One photo of many cards</b><br><span class="note">Each card gets found, straightened and listed.</span></div></div>'
+      + '<label class="autoread"><input type="checkbox" id="d-unposted" checked> Keep new cards off the shop until I post this box</label>'
+      + '<label class="autoread"><input type="checkbox" id="autoread"' + (autoRead() ? ' checked' : '') + '> Read card names from new photos automatically</label>'
+      + '<input type="file" id="files" accept="image/*" multiple hidden><input type="file" id="manyfile" accept="image/*" hidden><div id="split-area"></div><p class="note" id="upmsg" role="status">' + esc(A.up) + '</p>'
+      + '<details' + (A.boxQ ? ' open' : '') + '><summary class="note" style="cursor:pointer">Move cards you already have into this box</summary><div class="toolbar" style="margin:10px 0 6px"><input id="box-q" type="search" placeholder="Search your other cards" value="' + esc(A.boxQ) + '"><button class="btn sm primary" data-act="box-movehere">Move ticked cards here</button></div><div id="mvlist" class="mvlist"></div></details></section>'
+      + '<section class="panel"><div class="row2"><h2>In this box</h2><span class="note" id="boxcount">' + st.n + ' card' + (st.n === 1 ? '' : 's') + '</span></div><div id="boxlist" class="boxlist" style="margin-top:10px"></div></section>';
+    renderMoveList(); renderBoxContents();
+  }
+  function renderBoxContents() {
+    var el = document.getElementById("boxlist"); if (!el) return;
+    var cs = boxCards(A.box), STATUS_TXT = { available: ["On sale", "ok"], hidden: ["Waiting to post", "warn"], sold: ["Sold", ""] };
+    el.innerHTML = cs.length ? cs.map(function (c) {
+      var stt = STATUS_TXT[c.status] || [c.status, ""];
+      return '<div class="brow2"><span class="thumb">' + (c.image_path ? '<img src="' + esc(imgUrl(c.image_path)) + '" alt="" loading="lazy">' : '') + '</span><span class="bname"><b>' + esc(c.name) + '</b><small>' + esc([c.set_name, c.number ? "#" + c.number : "", c.condition].filter(Boolean).join(" · ")) + '</small></span><span class="price">' + money(c.price_cents) + (c.qty > 1 ? ' ×' + c.qty : '') + '</span><span class="chip ' + stt[1] + '">' + stt[0] + '</span><button class="btn sm ghost" data-act="box-take" data-id="' + c.id + '" title="Take this card out of the box (it stays in your inventory)">Take out</button></div>';
+    }).join("") : '<p class="empty">This box is empty. Add photos above, or move cards you already have into it.</p>';
+    var cnt = document.getElementById("boxcount"); if (cnt) cnt.textContent = cs.length + " card" + (cs.length === 1 ? "" : "s");
+  }
+  function renderMoveList() {
+    var el = document.getElementById("mvlist"); if (!el) return;
+    var q = A.boxQ.trim().toLowerCase(), list = A.cards.filter(function (c) { return (c.box || "").trim() !== A.box && c.status !== "sold" && (!q || (c.name + " " + c.set_name + " " + c.number + " " + c.game + " " + (c.box || "")).toLowerCase().indexOf(q) >= 0); });
+    el.innerHTML = list.length ? list.slice(0, 200).map(function (c) {
+      return '<label class="mvrow"><input type="checkbox" class="mvsel" data-id="' + c.id + '"' + (A.mv[c.id] ? ' checked' : '') + '><span class="thumb">' + (c.image_path ? '<img src="' + esc(imgUrl(c.image_path)) + '" alt="" loading="lazy">' : '') + '</span><span class="bname"><b>' + esc(c.name) + '</b><small>' + esc([c.set_name, c.number ? "#" + c.number : "", c.box ? "now in " + c.box : "no box"].filter(Boolean).join(" · ")) + '</small></span><span class="price">' + money(c.price_cents) + '</span></label>';
+    }).join("") + (list.length > 200 ? '<p class="note">Showing 200 of ' + list.length + '. Search to narrow it down.</p>' : '') : '<p class="note">No other cards match.</p>';
+  }
+  function printBox(nm) {
+    var cs = boxCards(nm), st = boxStats(nm), bx = A.boxes.find(function (b) { return b.name === nm; }) || {};
+    var w = window.open("", "_blank"); if (!w) { toast("Allow pop-ups for this page to print the contents sheet."); return; }
+    w.document.write('<!doctype html><html><head><meta charset="utf-8"><title>' + esc(nm) + ' contents</title><style>body{font:13px system-ui,sans-serif;margin:24px;color:#111}h1{font-size:22px;margin:0 0 4px}p{margin:0 0 14px;color:#555}table{width:100%;border-collapse:collapse}th,td{text-align:left;padding:6px 8px;border-bottom:1px solid #ddd}th{font-size:11px;text-transform:uppercase;letter-spacing:.06em;color:#666}td.r,th.r{text-align:right}tfoot td{font-weight:700;border-top:2px solid #111}</style></head><body>'
+      + '<h1>' + esc(nm) + '</h1><p>' + esc(A.settings.shop_name) + (bx.note ? ' · ' + esc(bx.note) : '') + ' · ' + st.n + ' cards · printed ' + new Date().toLocaleDateString() + '</p>'
+      + '<table><thead><tr><th>#</th><th>Card</th><th>Set</th><th>No.</th><th>Cond.</th><th class="r">Qty</th><th class="r">Price</th><th>Status</th></tr></thead><tbody>'
+      + cs.map(function (c, i) { return '<tr><td>' + (i + 1) + '</td><td>' + esc(c.name) + '</td><td>' + esc(c.set_name) + '</td><td>' + esc(c.number) + '</td><td>' + esc(c.condition) + '</td><td class="r">' + c.qty + '</td><td class="r">' + money(c.price_cents) + '</td><td>' + ({ available: "On sale", hidden: "Not posted", sold: "Sold" }[c.status] || c.status) + '</td></tr>'; }).join("")
+      + '</tbody><tfoot><tr><td colspan="6">Total value (unsold)</td><td class="r">' + money(st.value) + '</td><td></td></tr></tfoot></table><script>window.onload=function(){window.print()}<\/script></body></html>');
+    w.document.close();
+  }
+
   function renderSettings() {
     var el = document.getElementById("main"); if (!el || A.tab !== "settings") return;
     var s = A.settings, p = s.pay || {};
@@ -246,7 +333,12 @@
     if (r.error) throw r.error;
     return path;
   }
-  function defaults() { return { price_cents: toCents(document.getElementById("d-price").value || "1"), game: document.getElementById("d-game").value.trim(), condition: document.getElementById("d-cond").value, box: document.getElementById("d-box").value.trim() }; }
+  function defaults() {
+    var d = { price_cents: toCents(document.getElementById("d-price").value || "1"), game: document.getElementById("d-game").value.trim(), condition: document.getElementById("d-cond").value, box: document.getElementById("d-box").value.trim() };
+    var st = document.getElementById("d-unposted"); if (st && st.checked) d.status = "hidden";   // added inside a box: wait for "Post box"
+    return d;
+  }
+  function refreshTab() { if (A.tab === "boxes") renderBoxes(); else renderInventory(); }
   async function addPhotos(files) {
     files = Array.prototype.filter.call(files, function (f) { return /^image\//.test(f.type); }).sort(function (a, b) { return a.name.localeCompare(b.name, undefined, { numeric: true }); });
     if (!files.length) return;
@@ -263,7 +355,7 @@
     }
     var reading = created.length && autoRead() && window.BBOcr;
     A.up = "Added " + done + " card" + (done === 1 ? "" : "s") + (failed ? ", " + failed + " failed" : "") + "." + (reading ? " Reading names from the photos…" : " Fill in names and prices below.");
-    await loadCards(); renderInventory();
+    await loadCards(); refreshTab();
     if (reading) {
       var byPath = {}; rows.forEach(function (row, k) { byPath[row.image_path] = files.filter(function (f) { return f.__bbPath === row.image_path; })[0]; });
       readNames(created.map(function (c) { return { id: c.id, file: byPath[c.image_path], onlyIfName: c.name }; }));
@@ -304,6 +396,7 @@
           }
         } catch (e) { failed++; if (i === 0 && /download/i.test(e.message || "")) { readMsg(e.message); break; } }
       }
+      if (A.tab === "boxes" && A.box) renderBoxContents();
       readMsg("Read " + named + " name" + (named === 1 ? "" : "s") + (numbered ? " and " + numbered + " card number" + (numbered === 1 ? "" : "s") : "") + " from " + items.length + " photo" + (items.length === 1 ? "" : "s") + "."
         + (unsure ? " " + unsure + " couldn’t be read clearly; please fill those in." : "") + (failed ? " " + failed + " failed." : "") + " Check the names and prices below.");
     } catch (e) { readMsg("Couldn’t start the name reader: " + (e.message || e)); }
@@ -379,14 +472,14 @@
       return { name: get(r, "name").slice(0, 140), set_name: get(r, "set"), number: get(r, "number").replace(/^#/, ""), game: get(r, "game") || d.game, condition: mapCond(get(r, "cond")) || d.condition, price_cents: get(r, "price") ? toCents(get(r, "price")) : d.price_cents, qty: Math.max(1, parseInt(get(r, "qty"), 10) || 1), box: get(r, "box") || d.box, image_path: photoPath(get(r, "photo")), status: mapStatus(get(r, "status")) };
     });
     for (var i = 0; i < out.length; i += 500) { var r = await sb.from("cards").insert(out.slice(i, i + 500)); if (r.error) { toast("Import stopped: " + r.error.message); break; } }
-    A.up = "Imported " + out.length + " cards."; await loadCards(); renderInventory();
+    A.up = "Imported " + out.length + " cards."; await loadCards(); refreshTab();
   }
 
   /* ---------- events ---------- */
   app.addEventListener("click", async function (e) {
     var t = e.target.closest("[data-act]"); if (!t) { if (e.target.closest("#split-area")) return; if (e.target.closest("#drop")) document.getElementById("files").click(); else if (e.target.closest("#dropmany")) { var mf = document.getElementById("manyfile"); mf.value = ""; mf.click(); } return; }
     var a = t.getAttribute("data-act"), id = t.getAttribute("data-id");
-    if (a === "tab") { A.tab = t.getAttribute("data-tab"); if (A.tab === "orders") await loadOrders(); render(); }
+    if (a === "tab") { A.tab = t.getAttribute("data-tab"); if (A.tab === "orders") await loadOrders(); if (A.tab === "boxes") await loadBoxes(); A.up = ""; render(); }
     else if (a === "signout") { await sb.auth.signOut(); location.reload(); }
     else if (a === "filter") { A.filter = t.getAttribute("data-f"); renderOrders(); }
     else if (a === "paid") {
@@ -413,6 +506,59 @@
       var r3 = await sb.from("cards").delete().eq("id", id); if (r3.error) toast(r3.error.message); await loadCards(); renderRows();
     }
     else if (a === "selnone") { A.sel = {}; renderRows(); }
+    else if (a === "box-new") {
+      var inp = document.getElementById("newbox"), nm = (inp.value || "").trim();
+      if (!nm) { toast("Type a name for the box."); inp.focus(); return; }
+      if (await ensureBox(nm)) { A.box = nm; A.boxQ = ""; A.mv = {}; A.up = ""; renderBoxes(); }
+    }
+    else if (a === "box-open") { A.box = t.getAttribute("data-box"); A.boxQ = ""; A.mv = {}; A.up = ""; await ensureBox(A.box); renderBoxes(); window.scrollTo(0, 0); }
+    else if (a === "box-back") { A.box = null; renderBoxes(); }
+    else if (a === "box-post" || a === "box-unpost") {
+      var from = a === "box-post" ? "hidden" : "available", to = a === "box-post" ? "available" : "hidden";
+      var ids = boxCards(A.box).filter(function (c) { return c.status === from; }).map(function (c) { return c.id; });
+      if (!ids.length) return;
+      t.disabled = true;
+      for (var pi = 0; pi < ids.length; pi += 150) { var rp = await sb.from("cards").update({ status: to }).in("id", ids.slice(pi, pi + 150)); if (rp.error) { toast("Didn’t save: " + rp.error.message); break; } }
+      if (a === "box-post") await sb.from("boxes").update({ posted_at: new Date().toISOString() }).eq("name", A.box);
+      await Promise.all([loadCards(), loadBoxes()]); renderBoxes();
+      toast(a === "box-post" ? "Posted " + A.box + ": " + ids.length + " card" + (ids.length === 1 ? " is" : "s are") + " now on sale." : A.box + " is hidden from the shop.");
+    }
+    else if (a === "box-print") { printBox(A.box); }
+    else if (a === "box-rename") {
+      var newName = (document.getElementById("box-name").value || "").trim(), note = (document.getElementById("box-note").value || "").trim(), old = A.box;
+      if (!newName) { toast("The box needs a name."); return; }
+      if (newName !== old && boxNames().indexOf(newName) >= 0) { toast("There’s already a box called " + newName + "."); return; }
+      await ensureBox(old);
+      if (newName !== old) {
+        var rn = await sb.from("boxes").insert({ name: newName, note: note }); if (rn.error) { toast("Couldn’t rename: " + rn.error.message); return; }
+        var mc = await sb.from("cards").update({ box: newName }).eq("box", old); if (mc.error) { toast("Couldn’t move the cards: " + mc.error.message); return; }
+        await sb.from("boxes").delete().eq("name", old);
+        A.box = newName;
+      } else await sb.from("boxes").update({ note: note }).eq("name", old);
+      await Promise.all([loadCards(), loadBoxes()]); renderBoxes(); toast("Saved.");
+    }
+    else if (a === "box-del") {
+      var n0 = boxCards(A.box).length;
+      if (t.getAttribute("data-armed") !== "1") { t.setAttribute("data-armed", "1"); t.textContent = n0 ? "Confirm: delete box, keep its " + n0 + " cards" : "Confirm delete"; return; }
+      if (n0) { var cl = await sb.from("cards").update({ box: "" }).eq("box", A.box); if (cl.error) { toast(cl.error.message); return; } }
+      await sb.from("boxes").delete().eq("name", A.box);
+      toast("Deleted box " + A.box + (n0 ? ". Its cards are still in your inventory, with no box." : "."));
+      A.box = null; await Promise.all([loadCards(), loadBoxes()]); renderBoxes();
+    }
+    else if (a === "box-take") {
+      var rt = await sb.from("cards").update({ box: "" }).eq("id", id); if (rt.error) { toast(rt.error.message); return; }
+      var tc = A.cards.find(function (x) { return x.id === id; }); if (tc) tc.box = "";
+      renderBoxes();
+    }
+    else if (a === "box-movehere") {
+      var mids = Object.keys(A.mv).filter(function (k) { return A.mv[k]; });
+      if (!mids.length) { toast("Tick the cards to move first."); return; }
+      var patch = { box: A.box }, unposted = (document.getElementById("d-unposted") || {}).checked;
+      for (var mi = 0; mi < mids.length; mi += 150) { var rm = await sb.from("cards").update(patch).in("id", mids.slice(mi, mi + 150)); if (rm.error) { toast(rm.error.message); break; } }
+      A.cards.forEach(function (c) { if (A.mv[c.id]) c.box = A.box; });
+      toast("Moved " + mids.length + " card" + (mids.length === 1 ? "" : "s") + " into " + A.box + "." + (unposted ? " Cards that were already on sale stay on sale." : ""));
+      A.mv = {}; renderBoxes();
+    }
     else if (a === "bulk") {
       var k = t.getAttribute("data-k"), inp = document.getElementById("bk-" + (k === "price_cents" ? "price" : k)), raw = inp.value.trim();
       if (k === "price_cents") { if (!raw || toCents(raw) <= 0 && raw.replace(/[^0-9]/g, "") === "") { toast("Type a price first."); inp.focus(); return; } bulkUpdate({ price_cents: toCents(raw) }, "Price set to " + money(toCents(raw))); }
@@ -455,6 +601,8 @@
   app.addEventListener("input", function (e) {
     var t = e.target;
     if (t.id === "iq") { A.q = t.value; A.limit = 100; renderRows(); return; }
+    if (t.id === "box-q") { A.boxQ = t.value; renderMoveList(); return; }
+    if (t.id === "newbox" || t.id === "box-name" || t.id === "box-note") return;
     var f = t.getAttribute("data-f");
     if (f) {
       var id = t.closest(".irow").getAttribute("data-id"), c = A.cards.find(function (x) { return x.id === id; });
@@ -477,8 +625,15 @@
     if (t.tagName === "SELECT" && t.getAttribute("data-f")) { var id = t.closest(".irow").getAttribute("data-id"); var p = {}; p[t.getAttribute("data-f")] = t.value; saveCard(id, p); }
     if (t.type === "checkbox" && t.getAttribute("data-s")) saveSettings({ card_payments: t.checked });
     if (t.tagName === "SELECT" && (t.getAttribute("data-b") || t.getAttribute("data-a"))) { var bk = t.getAttribute("data-b"), tbl = bk ? "bundles" : "addons", rid = t.closest(bk ? "[data-bid]" : "[data-aid]").getAttribute(bk ? "data-bid" : "data-aid"); await sb.from(tbl).update({ active: t.value === "true" }).eq("id", rid); }
+    if (t.classList && t.classList.contains("mvsel")) { if (t.checked) A.mv[t.getAttribute("data-id")] = true; else delete A.mv[t.getAttribute("data-id")]; return; }
     if (t.id === "selall") { var vis = filtered(); vis.forEach(function (c) { if (t.checked) A.sel[c.id] = true; else delete A.sel[c.id]; }); renderRows(); return; }
     if (t.classList && t.classList.contains("rowsel")) { var row = t.closest(".irow"), rid2 = row.getAttribute("data-id"); if (t.checked) A.sel[rid2] = true; else delete A.sel[rid2]; row.classList.toggle("sel", t.checked); renderBulk(); return; }
+    if (t.id === "bk-movebox" && t.value) {
+      var dest = t.value;
+      if (dest === "__new") { dest = (prompt("Name of the new box (e.g. 50 MLB #3):") || "").trim(); if (!dest) { t.value = ""; return; } await ensureBox(dest); }
+      if (dest === "__none") dest = "";
+      bulkUpdate({ box: dest }, dest ? "Moved to " + dest : "Taken out of their box"); return;
+    }
     if ((t.id === "bk-status" || t.id === "bk-condition") && t.value) { var key = t.id.slice(3), pv = {}; pv[key] = t.value; var lab = t.options[t.selectedIndex].text; bulkUpdate(pv, (key === "status" ? "Status" : "Condition") + " set to " + lab); return; }
     if (t.id === "files") { addPhotos(t.files); }
     if (t.id === "manyfile" && t.files[0]) openMany(t.files[0]);
@@ -494,6 +649,7 @@
     if (d.id === "dropmany") { var f = Array.prototype.find.call(e.dataTransfer.files, function (x) { return /^image\//.test(x.type); }); if (f) openMany(f); else toast("Drop a photo (JPG, PNG or WebP)."); }
     else addPhotos(e.dataTransfer.files);
   });
+  app.addEventListener("keydown", function (e) { if (e.key === "Enter" && e.target.id === "newbox") { e.preventDefault(); var bn = document.querySelector('[data-act="box-new"]'); if (bn) bn.click(); } });
   app.addEventListener("keydown", function (e) { if ((e.key === "Enter" || e.key === " ") && e.target.id && (e.target.id === "drop" || e.target.id === "dropmany")) { e.preventDefault(); e.target.click(); } });
 
   boot();
